@@ -1,7 +1,3 @@
-Below is a **professional, enterprise-grade README.md** you can use directly in your repository.
-
----
-
 # ITEMBA-ENERGIES Fuel Management System (IFMS)
 
 ## Overview
