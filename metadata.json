@@ -1,0 +1,8 @@
+{
+  "name": "IFMS Enterprise Financial Suite",
+  "description": "A production-grade Integrated Financial Management System featuring enterprise dashboards, real-time analytics, and AI-powered financial insights using Gemini.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

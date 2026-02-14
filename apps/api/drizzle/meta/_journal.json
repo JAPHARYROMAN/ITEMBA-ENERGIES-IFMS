@@ -1,0 +1,1 @@
+{"version":"7","dialect":"postgresql","entries":[{"idx":0,"version":"7","when":1739487600000,"tag":"0000_init_health","breakpoints":true},{"idx":1,"version":"7","when":1771046848402,"tag":"0001_ifms_full_schema","breakpoints":true},{"idx":2,"version":"7","when":1771057489032,"tag":"0002_careful_golden_guardian","breakpoints":true}]}

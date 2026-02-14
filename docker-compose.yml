@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ifms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ifms
+      POSTGRES_PASSWORD: ifms
+      POSTGRES_DB: ifms
+    ports:
+      - "5432:5432"
+    volumes:
+      - ifms_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ifms -d ifms"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ifms-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      FRONTEND_ORIGIN: http://localhost:3000
+      DATABASE_URL: postgresql://ifms:ifms@postgres:5432/ifms
+      REQUEST_BODY_LIMIT: 1mb
+      RUN_MIGRATIONS_ON_STARTUP: "true"
+      ENABLE_SWAGGER: "false"
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health/live >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ifms_pgdata:
