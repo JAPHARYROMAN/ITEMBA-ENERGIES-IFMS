@@ -95,21 +95,32 @@ export async function apiFetch<T = unknown>(
 
   let res = await doRequest();
 
+  // Retry once on 401 by refreshing the access token
   if (res.status === 401 && !skipAuth && getRefreshToken()) {
     try {
       if (!refreshPromise) refreshPromise = doRefresh();
       await refreshPromise;
-      refreshPromise = null;
-      const newToken = getAccessToken();
-      if (newToken) headers.set('Authorization', `Bearer ${newToken}`);
-      res = await doRequest();
     } catch {
+      // Refresh failed — logout and throw original error
       refreshPromise = null;
       clearTokens();
       if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('ifms:auth-logout'));
       const body = await res.json().catch(() => ({}));
       const err = await normalizeError(res, body);
       throw Object.assign(new Error(err.message), { statusCode: err.statusCode, apiError: err });
+    }
+    refreshPromise = null;
+    const newToken = getAccessToken();
+    if (newToken) headers.set('Authorization', `Bearer ${newToken}`);
+    res = await doRequest();
+  }
+
+  // Retry up to 2 times on 502/503/504 with exponential backoff
+  if ([502, 503, 504].includes(res.status)) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await new Promise((r) => setTimeout(r, attempt * 1000));
+      res = await doRequest();
+      if (![502, 503, 504].includes(res.status)) break;
     }
   }
 
@@ -122,3 +133,12 @@ export async function apiFetch<T = unknown>(
 }
 
 export { clearTokens, getAccessToken, getRefreshToken, setTokens };
+
+// Convenience API client methods
+export const apiClient = {
+  get: <T = unknown>(path: string) => apiFetch<T>(path),
+  post: <T = unknown>(path: string, body?: unknown) => apiFetch<T>(path, { method: 'POST', body }),
+  put: <T = unknown>(path: string, body?: unknown) => apiFetch<T>(path, { method: 'PUT', body }),
+  patch: <T = unknown>(path: string, body?: unknown) => apiFetch<T>(path, { method: 'PATCH', body }),
+  delete: <T = unknown>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
+};

@@ -1,10 +1,11 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
-import { companies } from '../../database/schema/core';
+import { companies, stations } from '../../database/schema/core';
 import { parseSort } from '../../common/dto/sort.dto';
 import { getListParams } from '../../common/helpers/list.helper';
 import { throwConflictIfUniqueViolation } from '../../common/utils/db-errors';
@@ -31,6 +32,7 @@ export interface CompanyItem {
   id: string;
   code: string;
   name: string;
+  currency: string;
   status: string;
   createdAt: Date;
 }
@@ -63,6 +65,7 @@ export class CompaniesService {
           id: companies.id,
           code: companies.code,
           name: companies.name,
+          currency: companies.currency,
           status: companies.status,
           createdAt: companies.createdAt,
         })
@@ -87,6 +90,7 @@ export class CompaniesService {
         id: companies.id,
         code: companies.code,
         name: companies.name,
+        currency: companies.currency,
         status: companies.status,
         createdAt: companies.createdAt,
       })
@@ -97,7 +101,7 @@ export class CompaniesService {
   }
 
   async create(
-    payload: { code: string; name: string; status?: string },
+    payload: { code: string; name: string; currency?: string; status?: string },
     auditContext: { userId?: string; ip?: string; userAgent?: string },
   ): Promise<CompanyItem> {
     const code = payload.code.trim();
@@ -108,16 +112,18 @@ export class CompaniesService {
         .values({
           code,
           name: payload.name.trim(),
+          currency: payload.currency?.toUpperCase() ?? 'USD',
           status: payload.status ?? 'active',
         })
         .returning({
           id: companies.id,
           code: companies.code,
           name: companies.name,
+          currency: companies.currency,
           status: companies.status,
           createdAt: companies.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({
         entity: 'companies',
         entityId: inserted.id,
@@ -136,7 +142,7 @@ export class CompaniesService {
 
   async update(
     id: string,
-    payload: { code?: string; name?: string; status?: string },
+    payload: { code?: string; name?: string; currency?: string; status?: string },
     auditContext: { userId?: string; ip?: string; userAgent?: string },
   ): Promise<CompanyItem> {
     const before = await this.findByIdOrNull(id);
@@ -151,6 +157,7 @@ export class CompaniesService {
         .set({
           ...(payload.code !== undefined && { code: payload.code.trim() }),
           ...(payload.name !== undefined && { name: payload.name.trim() }),
+          ...(payload.currency !== undefined && { currency: payload.currency.toUpperCase() }),
           ...(payload.status !== undefined && { status: payload.status }),
           updatedAt: new Date(),
           ...(auditContext.userId && { updatedBy: auditContext.userId }),
@@ -160,6 +167,7 @@ export class CompaniesService {
           id: companies.id,
           code: companies.code,
           name: companies.name,
+          currency: companies.currency,
           status: companies.status,
           createdAt: companies.createdAt,
         });
@@ -188,6 +196,12 @@ export class CompaniesService {
   ): Promise<void> {
     const before = await this.findByIdOrNull(id);
     if (!before) throw new NotFoundException('Company not found');
+    const [dep] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(stations)
+      .where(and(eq(stations.companyId, id), isNull(stations.deletedAt)));
+    if (Number(dep.count) > 0)
+      throw new BadRequestException(`Cannot delete company: has ${dep.count} active station(s)`);
     await this.db
       .update(companies)
       .set({
@@ -213,6 +227,7 @@ export class CompaniesService {
         id: companies.id,
         code: companies.code,
         name: companies.name,
+        currency: companies.currency,
         status: companies.status,
         createdAt: companies.createdAt,
       })

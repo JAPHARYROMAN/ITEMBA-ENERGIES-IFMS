@@ -1,10 +1,13 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
-import { branches } from '../../database/schema/core';
+import { branches, stations } from '../../database/schema/core';
+import { tanks } from '../../database/schema/setup';
+import { customers } from '../../database/schema/credit';
 import { parseSort } from '../../common/dto/sort.dto';
 import { getListParams } from '../../common/helpers/list.helper';
 import { throwConflictIfUniqueViolation } from '../../common/utils/db-errors';
@@ -99,10 +102,16 @@ export class BranchesService {
   ): Promise<BranchItem> {
     const code = payload.code.trim();
     await this.assertCodeUniqueInStation(payload.stationId, code);
+    const [station] = await this.db
+      .select({ companyId: stations.companyId })
+      .from(stations)
+      .where(eq(stations.id, payload.stationId));
+    if (!station) throw new NotFoundException('Station not found');
     try {
       const [inserted] = await this.db
         .insert(branches)
         .values({
+          companyId: station.companyId,
           stationId: payload.stationId,
           code,
           name: payload.name.trim(),
@@ -116,7 +125,7 @@ export class BranchesService {
           status: branches.status,
           createdAt: branches.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({
         entity: 'branches',
         entityId: inserted.id,
@@ -187,6 +196,18 @@ export class BranchesService {
   async remove(id: string, auditContext: { userId?: string; ip?: string; userAgent?: string }): Promise<void> {
     const before = await this.findByIdOrNull(id);
     if (!before) throw new NotFoundException('Branch not found');
+    const [depTanks] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(tanks)
+      .where(and(eq(tanks.branchId, id), isNull(tanks.deletedAt)));
+    if (Number(depTanks.count) > 0)
+      throw new BadRequestException(`Cannot delete branch: has ${depTanks.count} active tank(s)`);
+    const [depCustomers] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(customers)
+      .where(and(eq(customers.branchId, id), isNull(customers.deletedAt)));
+    if (Number(depCustomers.count) > 0)
+      throw new BadRequestException(`Cannot delete branch: has ${depCustomers.count} active customer(s)`);
     await this.db
       .update(branches)
       .set({

@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -13,7 +14,6 @@ import { getListParams } from '../../common/helpers/list.helper';
 import {
   AdjustmentsService,
   type AdjustmentItem,
-  type AdjustmentsListParams,
 } from './adjustments.service';
 import { CreateAdjustmentDto } from './dto/create-adjustment.dto';
 
@@ -27,6 +27,7 @@ export class AdjustmentsController extends BaseListController {
   }
 
   @Post()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('adjustments:write')
   @ApiOperation({ summary: 'Create stock adjustment (Manager permission + reason required)' })
   @ApiResponse({ status: 201, description: 'Adjustment created' })
@@ -49,7 +50,7 @@ export class AdjustmentsController extends BaseListController {
   @ApiOperation({ summary: 'List adjustments' })
   @ApiResponse({ status: 200 })
   async list(
-    @Query() query: ListQueryDto & AdjustmentsListParams,
+    @Query() query: ListQueryDto,
   ): Promise<ListResponse<AdjustmentItem>> {
     const params = getListParams(query);
     const { data, total } = await this.adjustmentsService.findPage({
@@ -62,5 +63,14 @@ export class AdjustmentsController extends BaseListController {
       dateTo: query.dateTo,
     });
     return this.listResponse(data, total, { page: params.page, pageSize: params.pageSize });
+  }
+
+  @Get(':id')
+  @Permissions('adjustments:read')
+  @ApiOperation({ summary: 'Get adjustment by ID' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Adjustment not found' })
+  async getById(@Param('id', ParseUUIDPipe) id: string): Promise<AdjustmentItem> {
+    return this.adjustmentsService.findById(id);
   }
 }

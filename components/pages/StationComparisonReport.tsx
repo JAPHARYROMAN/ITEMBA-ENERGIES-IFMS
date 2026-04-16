@@ -23,8 +23,11 @@ import {
 } from 'lucide-react';
 import { TableSkeleton } from '../ifms/Skeletons';
 import { useReportsStore } from '../../store';
+import { ExportButton } from '../ifms/ExportButton';
+import { useCurrency } from '../../lib/hooks/useCurrency';
 
 const StationComparisonReport: React.FC = () => {
+  const { fmtCompact, header } = useCurrency();
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     const saved = localStorage.getItem('ifms-pinned-stations');
     return saved ? JSON.parse(saved) : [];
@@ -82,18 +85,21 @@ const StationComparisonReport: React.FC = () => {
         title="Branch Comparative Intelligence" 
         description="Benchmark performance across stations with multi-metric normalization and ranking."
         actions={
-          <button 
-            onClick={() => comparisonIds.length > 1 && setShowComparisonModal(true)}
-            disabled={comparisonIds.length < 2}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold shadow-lg transition-all ${
-              comparisonIds.length < 2 
-                ? 'bg-muted text-muted-foreground cursor-not-allowed' 
-                : 'bg-indigo-600 text-white shadow-indigo-500/20 hover:bg-indigo-700'
-            }`}
-          >
-            <ArrowRightLeft size={16} />
-            Compare {comparisonIds.length} Stations
-          </button>
+          <div className="flex items-center gap-2">
+            <ExportButton exportType="reports.station-comparison" params={filters} label="Export" />
+            <button 
+              onClick={() => comparisonIds.length > 1 && setShowComparisonModal(true)}
+              disabled={comparisonIds.length < 2}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold shadow-lg transition-all ${
+                comparisonIds.length < 2 
+                  ? 'bg-muted text-muted-foreground cursor-not-allowed' 
+                  : 'bg-indigo-600 text-white shadow-indigo-500/20 hover:bg-indigo-700'
+              }`}
+            >
+              <ArrowRightLeft size={16} />
+              Compare {comparisonIds.length} Stations
+            </button>
+          </div>
         }
       />
 
@@ -115,7 +121,7 @@ const StationComparisonReport: React.FC = () => {
                 <tr>
                   <th className="px-6 py-4 w-12">Pin</th>
                   <th className="px-6 py-4 min-w-[200px]">Station</th>
-                  <th className="px-6 py-4">Sales ($)</th>
+                  <th className="px-6 py-4">{header('Sales')}</th>
                   <th className="px-6 py-4">Margin %</th>
                   <th className="px-6 py-4">Shrink %</th>
                   <th className="px-6 py-4">OpEx Ratio</th>
@@ -142,7 +148,7 @@ const StationComparisonReport: React.FC = () => {
                        <p className="font-bold text-foreground">{s.name}</p>
                        <p className="text-[10px] text-muted-foreground truncate">{s.location}</p>
                     </td>
-                    <td className="px-6 py-4 font-medium">${s.sales.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                    <td className="px-6 py-4 font-medium">{fmtCompact(s.sales)}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         <span className="font-bold">{s.marginPct.toFixed(1)}%</span>
@@ -215,7 +221,7 @@ const StationComparisonReport: React.FC = () => {
                           <div className="grid grid-cols-2 gap-2">
                              <div>
                                 <p className="text-[9px] font-bold text-muted-foreground uppercase">Sales</p>
-                                <p className="text-sm font-black">${s.sales.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                                <p className="text-sm font-black">{fmtCompact(s.sales)}</p>
                              </div>
                              <div>
                                 <p className="text-[9px] font-bold text-muted-foreground uppercase">Margin</p>

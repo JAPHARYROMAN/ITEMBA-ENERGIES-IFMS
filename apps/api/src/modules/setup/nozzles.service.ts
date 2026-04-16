@@ -1,10 +1,11 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
-import { nozzles } from '../../database/schema/setup';
+import { nozzles, pumps, tanks, products } from '../../database/schema/setup';
 import { parseSort } from '../../common/dto/sort.dto';
 import { getListParams } from '../../common/helpers/list.helper';
 import { throwConflictIfUniqueViolation } from '../../common/utils/db-errors';
@@ -51,11 +52,17 @@ export class NozzlesService {
 
   async create(payload: { stationId: string; pumpId: string; tankId: string; productId: string; code: string; status?: string }, auditContext: { userId?: string; ip?: string; userAgent?: string }): Promise<NozzleItem> {
     const code = payload.code.trim();
-    const [ex] = await this.db.select({ id: nozzles.id }).from(nozzles).where(and(eq(nozzles.stationId, payload.stationId), eq(nozzles.code, code)));
+    const [pump] = await this.db.select({ id: pumps.id }).from(pumps).where(and(eq(pumps.id, payload.pumpId), isNull(pumps.deletedAt)));
+    if (!pump) throw new NotFoundException('Pump not found');
+    const [tank] = await this.db.select({ id: tanks.id }).from(tanks).where(and(eq(tanks.id, payload.tankId), isNull(tanks.deletedAt)));
+    if (!tank) throw new NotFoundException('Tank not found');
+    const [product] = await this.db.select({ id: products.id }).from(products).where(and(eq(products.id, payload.productId), isNull(products.deletedAt)));
+    if (!product) throw new NotFoundException('Product not found');
+    const [ex] = await this.db.select({ id: nozzles.id }).from(nozzles).where(and(eq(nozzles.stationId, payload.stationId), eq(nozzles.code, code), isNull(nozzles.deletedAt)));
     if (ex) throw new ConflictException(`Nozzle with code "${code}" already exists in this station`);
     try {
       const [ins] = await this.db.insert(nozzles).values({ stationId: payload.stationId, pumpId: payload.pumpId, tankId: payload.tankId, productId: payload.productId, code, status: payload.status ?? 'active' }).returning({ id: nozzles.id, stationId: nozzles.stationId, pumpId: nozzles.pumpId, tankId: nozzles.tankId, productId: nozzles.productId, code: nozzles.code, status: nozzles.status, createdAt: nozzles.createdAt });
-      if (!ins) throw new Error('Insert failed');
+      if (!ins) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({ entity: 'nozzles', entityId: ins.id, action: 'create', after: ins as object, userId: auditContext.userId, ip: auditContext.ip, userAgent: auditContext.userAgent });
       return ins;
     } catch (err) {
@@ -71,7 +78,7 @@ export class NozzlesService {
     if (payload.code !== undefined) {
       const code = payload.code.trim();
       if (code !== before.code) {
-        const [ex] = await this.db.select({ id: nozzles.id }).from(nozzles).where(and(eq(nozzles.stationId, stationId), eq(nozzles.code, code)));
+        const [ex] = await this.db.select({ id: nozzles.id }).from(nozzles).where(and(eq(nozzles.stationId, stationId), eq(nozzles.code, code), isNull(nozzles.deletedAt)));
         if (ex) throw new ConflictException(`Nozzle with code "${code}" already exists in this station`);
       }
     }

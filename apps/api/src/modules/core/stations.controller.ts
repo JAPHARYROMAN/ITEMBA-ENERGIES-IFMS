@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -57,7 +57,7 @@ export class StationsController extends BaseListController {
   @ApiOperation({ summary: 'Get station by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<StationItem> {
+  async getById(@Param('id', ParseUUIDPipe) id: string): Promise<StationItem> {
     return this.stationsService.findById(id);
   }
 
@@ -91,7 +91,7 @@ export class StationsController extends BaseListController {
   @ApiResponse({ status: 404 })
   @ApiResponse({ status: 409 })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateStationDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -110,7 +110,7 @@ export class StationsController extends BaseListController {
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
   async delete(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 import { VARIANCE_CLASSIFICATIONS } from '../../../database/schema/inventory/variances';
 
 export class CreateReconciliationDto {
@@ -9,7 +9,7 @@ export class CreateReconciliationDto {
   branchId!: string;
 
   @ApiProperty({ description: 'Reconciliation date (ISO)' })
-  @IsString()
+  @IsDateString({}, { message: 'reconciliationDate must be a valid ISO 8601 date string' })
   reconciliationDate!: string;
 
   @ApiProperty({ description: 'Physical/actual volume (e.g. from dip sum or manual)' })

@@ -1,6 +1,7 @@
-
 import React from 'react';
 import { Search, SlidersHorizontal, Download, Calendar } from 'lucide-react';
+import { DATE_PRESETS } from '../../lib/constants';
+import { useTranslation } from 'react-i18next';
 
 interface FilterBarProps {
   onSearch?: (query: string) => void;
@@ -10,7 +11,7 @@ interface FilterBarProps {
   onToggleFilters?: () => void;
 }
 
-const datePresets = [7, 30, 90];
+const datePresets = DATE_PRESETS;
 
 const FilterBar: React.FC<FilterBarProps> = ({
   onSearch,
@@ -19,6 +20,7 @@ const FilterBar: React.FC<FilterBarProps> = ({
   onDatePresetChange,
   onToggleFilters,
 }) => {
+  const { t } = useTranslation();
   const [presetIndex, setPresetIndex] = React.useState(1);
   const currentDays = datePresets[presetIndex] ?? 30;
 
@@ -32,9 +34,10 @@ const FilterBar: React.FC<FilterBarProps> = ({
     <div className="flex flex-wrap items-center gap-3 mb-6">
       <div className="relative flex-1 min-w-[240px]">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <input 
-          type="text" 
-          placeholder="Search..." 
+        <input
+          type="text"
+          placeholder={t('filterBar.searchPlaceholder')}
+          aria-label={t('filterBar.searchRecords')}
           onChange={(e) => onSearch?.(e.target.value)}
           className="w-full h-10 bg-background border border-input rounded-lg pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary outline-none"
         />
@@ -43,6 +46,7 @@ const FilterBar: React.FC<FilterBarProps> = ({
         <button
           type="button"
           onClick={cycleDatePreset}
+          aria-label={t('filterBar.lastDays', { days: currentDays })}
           className="h-10 px-3 border border-input rounded-lg flex items-center gap-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
         >
           <Calendar size={16} />
@@ -52,19 +56,21 @@ const FilterBar: React.FC<FilterBarProps> = ({
       <button
         type="button"
         onClick={onToggleFilters}
+        aria-label={t('filterBar.toggleFilters')}
         className="h-10 px-3 border border-input rounded-lg flex items-center gap-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
       >
         <SlidersHorizontal size={16} />
-        <span>Filters</span>
+        <span>{t('filterBar.filters')}</span>
       </button>
-      <button 
+      <button
         type="button"
         onClick={onExport}
         disabled={!onExport}
+        aria-label={t('filterBar.exportData')}
         className="h-10 px-3 border border-input rounded-lg flex items-center gap-2 text-sm text-muted-foreground hover:bg-muted transition-colors ml-auto"
       >
         <Download size={16} />
-        <span className="hidden sm:inline">Export</span>
+        <span className="hidden sm:inline">{t('common.export')}</span>
       </button>
     </div>
   );

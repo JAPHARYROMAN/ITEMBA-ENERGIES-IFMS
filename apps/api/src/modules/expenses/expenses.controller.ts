@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -28,6 +28,7 @@ import { ExpensesService, type ExpenseCategoryItem, type ExpenseEntryItem, type 
 import { CreateExpenseCategoryDto } from './dto/create-expense-category.dto';
 import { UpdateExpenseCategoryDto } from './dto/update-expense-category.dto';
 import { CreateExpenseEntryDto } from './dto/create-expense-entry.dto';
+import { UpdateExpenseEntryDto } from './dto/update-expense-entry.dto';
 import { CreatePettyCashTxDto } from './dto/create-petty-cash-tx.dto';
 import { RejectExpenseEntryDto } from './dto/reject-expense-entry.dto';
 
@@ -45,7 +46,7 @@ export class ExpensesController extends BaseListController {
   @ApiOperation({ summary: 'List expense categories' })
   @ApiResponse({ status: 200 })
   async listCategories(
-    @Query() query: ListQueryDto & { status?: string },
+    @Query() query: ListQueryDto,
   ): Promise<ListResponse<ExpenseCategoryItem>> {
     const params = getListParams(query);
     const { data, total } = await this.expensesService.listExpenseCategories({
@@ -65,7 +66,7 @@ export class ExpensesController extends BaseListController {
   @ApiOperation({ summary: 'Get expense category by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getCategory(@Param('id') id: string): Promise<ExpenseCategoryItem> {
+  async getCategory(@Param('id', ParseUUIDPipe) id: string): Promise<ExpenseCategoryItem> {
     return this.expensesService.getExpenseCategory(id);
   }
 
@@ -86,6 +87,25 @@ export class ExpensesController extends BaseListController {
     });
   }
 
+  @Patch('expense-entries/:id')
+  @Permissions('expenses:write')
+  @ApiOperation({ summary: 'Update draft/rejected expense entry' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 400 })
+  @ApiResponse({ status: 404 })
+  async updateEntry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateExpenseEntryDto,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ): Promise<ExpenseEntryItem> {
+    return this.expensesService.updateExpenseEntry(id, dto, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
   @Patch('expense-categories/:id')
   @Permissions('expenses:write')
   @ApiOperation({ summary: 'Update expense category' })
@@ -93,7 +113,7 @@ export class ExpensesController extends BaseListController {
   @ApiResponse({ status: 404 })
   @ApiResponse({ status: 409 })
   async updateCategory(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateExpenseCategoryDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -112,7 +132,7 @@ export class ExpensesController extends BaseListController {
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
   async deleteCategory(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {
@@ -144,7 +164,7 @@ export class ExpensesController extends BaseListController {
   @ApiOperation({ summary: 'List expense entries' })
   @ApiResponse({ status: 200 })
   async listEntries(
-    @Query() query: ListQueryDto & { status?: string },
+    @Query() query: ListQueryDto,
   ): Promise<ListResponse<ExpenseEntryItem>> {
     const params = getListParams(query);
     const { data, total } = await this.expensesService.listExpenseEntries({
@@ -160,6 +180,15 @@ export class ExpensesController extends BaseListController {
     return this.listResponse(data, total, { page: params.page, pageSize: params.pageSize });
   }
 
+  @Get('expense-entries/:id')
+  @Permissions('expenses:read')
+  @ApiOperation({ summary: 'Get expense entry by ID' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Expense entry not found' })
+  async getEntry(@Param('id', ParseUUIDPipe) id: string): Promise<ExpenseEntryItem> {
+    return this.expensesService.getExpenseEntry(id);
+  }
+
   @Post('expense-entries/:id/submit')
   @Permissions('expenses:write')
   @ApiOperation({ summary: 'Submit expense entry for approval' })
@@ -167,7 +196,7 @@ export class ExpensesController extends BaseListController {
   @ApiResponse({ status: 400 })
   @ApiResponse({ status: 404 })
   async submitEntry(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<ExpenseEntryItem> {
@@ -187,7 +216,7 @@ export class ExpensesController extends BaseListController {
   @ApiResponse({ status: 403 })
   @ApiResponse({ status: 404 })
   async approveEntry(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<ExpenseEntryItem> {
@@ -207,12 +236,31 @@ export class ExpensesController extends BaseListController {
   @ApiResponse({ status: 403 })
   @ApiResponse({ status: 404 })
   async rejectEntry(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RejectExpenseEntryDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<ExpenseEntryItem> {
     return this.expensesService.rejectExpenseEntry(id, dto.reason, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+  }
+
+  @Delete('expense-entries/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Permissions('expenses:write')
+  @ApiOperation({ summary: 'Soft-delete expense entry (draft or rejected only)' })
+  @ApiResponse({ status: 204 })
+  @ApiResponse({ status: 400, description: 'Entry not in draft/rejected status' })
+  @ApiResponse({ status: 404 })
+  async deleteEntry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.expensesService.deleteExpenseEntry(id, {
       userId: user.sub,
       ip: req.ip,
       userAgent: req.headers['user-agent'],

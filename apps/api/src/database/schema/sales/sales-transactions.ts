@@ -1,4 +1,4 @@
-import { index, numeric, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { index, numeric, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { auditColumns } from '../shared';
 import { companies } from '../core/companies';
 import { branches } from '../core/branches';
@@ -28,10 +28,11 @@ export const salesTransactions = pgTable(
     shiftId: uuid('shift_id').references(() => shifts.id, { onDelete: 'set null' }),
     status: varchar('status', { length: 20 }).notNull().default(SALE_STATUS_COMPLETED),
     voidedAt: timestamp('voided_at', { withTimezone: true }),
-    voidedBy: uuid('voided_by').references(() => users.id),
+    voidedBy: uuid('voided_by').references(() => users.id, { onDelete: 'set null' }),
     voidReason: varchar('void_reason', { length: 512 }),
   },
   (t) => [
+    uniqueIndex('sales_transactions_receipt_number_unique').on(t.companyId, t.receiptNumber),
     index('sales_transactions_company_branch_date_idx').on(t.companyId, t.branchId, t.transactionDate),
     index('sales_transactions_created_at_idx').on(t.createdAt),
     index('sales_transactions_status_idx').on(t.status),

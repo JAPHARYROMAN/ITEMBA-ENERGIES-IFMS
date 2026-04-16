@@ -1,4 +1,4 @@
-import { IsIn, IsObject, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsObject, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 const reportActionTypes = [
   'request-physical-audit',
@@ -20,8 +20,7 @@ export class ReportActionDto {
   action!: ReportActionType;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @IsUUID()
   targetId?: string;
 
   @IsOptional()

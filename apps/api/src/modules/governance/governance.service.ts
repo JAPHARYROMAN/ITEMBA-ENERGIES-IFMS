@@ -1,6 +1,8 @@
+import { InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, eq, isNull, or } from 'drizzle-orm';
+import { Cron } from '@nestjs/schedule';
+import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
@@ -23,6 +25,7 @@ import {
   type ApprovalPolicyStep,
 } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
+import { NotificationTriggersService } from '../notifications/notification-triggers.service';
 import type {
   ActionReasonDto,
   CreateApprovalDto,
@@ -57,15 +60,127 @@ export function violatesMakerChecker(
 
 @Injectable()
 export class GovernanceService {
+  private readonly logger = new Logger(GovernanceService.name);
+
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<Schema>,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly evaluator: PolicyEvaluatorService,
+    private readonly notificationTriggers: NotificationTriggersService,
   ) {}
 
   isEnabled(): boolean {
     return this.config.get<boolean>('GOVERNANCE_ENABLED', false);
+  }
+
+  /**
+   * Hourly cron job that auto-rejects approval requests that have exceeded
+   * the configurable deadline (GOVERNANCE_APPROVAL_DEADLINE_HOURS, default 48h).
+   * Uses `requestedAt + deadlineHours` as the expiry cutoff.
+   */
+  @Cron('0 0 * * * *', {
+    name: 'governance-expired-approvals',
+    timeZone: 'UTC',
+  })
+  async checkExpiredApprovals(): Promise<void> {
+    if (!this.isEnabled()) return;
+
+    const deadlineHours = this.config.get<number>('GOVERNANCE_APPROVAL_DEADLINE_HOURS', 48);
+    const cutoff = new Date(Date.now() - deadlineHours * 3600_000);
+
+    this.logger.log(`Checking for expired approval requests (deadline: ${deadlineHours}h, cutoff: ${cutoff.toISOString()})`);
+
+    try {
+      const expiredRequests = await this.db
+        .select()
+        .from(approvalRequests)
+        .where(
+          and(
+            eq(approvalRequests.status, 'submitted'),
+            lte(approvalRequests.requestedAt, cutoff),
+            isNull(approvalRequests.deletedAt),
+          ),
+        );
+
+      if (expiredRequests.length === 0) {
+        this.logger.log('No expired approval requests found');
+        return;
+      }
+
+      this.logger.log(`Found ${expiredRequests.length} expired approval request(s)`);
+
+      for (const request of expiredRequests) {
+        try {
+          await this.rejectExpiredRequest(request, deadlineHours);
+        } catch (error) {
+          this.logger.error(`Failed to auto-reject expired approval request ${request.id}:`, error);
+        }
+      }
+
+      this.logger.log(`Expired approvals check complete — processed ${expiredRequests.length} request(s)`);
+    } catch (error) {
+      this.logger.error('Error during expired approvals check:', error);
+    }
+  }
+
+  private async rejectExpiredRequest(
+    request: typeof approvalRequests.$inferSelect,
+    deadlineHours: number,
+  ): Promise<void> {
+    const reason = `Auto-rejected: approval deadline of ${deadlineHours} hours exceeded`;
+    const now = new Date();
+
+    await this.db.transaction(async (tx) => {
+      await tx
+        .update(approvalRequests)
+        .set({ status: 'rejected', updatedAt: now, updatedBy: request.requestedBy })
+        .where(eq(approvalRequests.id, request.id));
+
+      await tx
+        .update(approvalSteps)
+        .set({ status: 'skipped', updatedAt: now, updatedBy: request.requestedBy })
+        .where(and(eq(approvalSteps.approvalRequestId, request.id), eq(approvalSteps.status, 'pending')));
+
+      await tx.insert(approvalsAudit).values({
+        approvalRequestId: request.id,
+        eventType: 'deadline_expired',
+        actorUserId: request.requestedBy,
+        payloadJson: { reason, deadlineHours },
+      });
+    });
+
+    await this.audit.log({
+      entity: 'governance_approval_requests',
+      entityId: request.id,
+      action: 'deadline_auto_reject',
+      after: { status: 'rejected', reason } as object,
+      userId: request.requestedBy,
+    });
+
+    // Notify the requester about the expiry
+    try {
+      await this.notificationTriggers.notifyApprovalRejected(request.id, {
+        companyId: request.companyId,
+        branchId: request.branchId,
+        title: `${request.entityType} ${request.actionType}`,
+        entityType: request.entityType,
+        entityId: request.entityId,
+        requesterId: request.requestedBy,
+        rejectedBy: request.requestedBy,
+        rejectionReason: reason,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to send deadline expiry notification for request ${request.id}:`, error);
+    }
+
+    // Apply rejection side-effects (same as manual rejection)
+    try {
+      const actor: GovernanceActor = { userId: request.requestedBy, permissions: [] };
+      await this.applyDecisionEffects(this.db, request, 'rejected', actor, reason);
+    } catch (error) {
+      this.logger.error(`Failed to apply rejection effects for expired request ${request.id}:`, error);
+    }
   }
 
   async listPolicies(filters: ListPoliciesDto) {
@@ -98,7 +213,7 @@ export class GovernanceService {
         updatedBy: actor.userId,
       })
       .returning();
-    if (!inserted) throw new Error('Failed to create policy');
+    if (!inserted) throw new InternalServerErrorException('Failed to create policy');
 
     await this.audit.log({
       entity: 'governance_policies',
@@ -137,7 +252,7 @@ export class GovernanceService {
       })
       .where(eq(approvalPolicies.id, id))
       .returning();
-    if (!updated) throw new Error('Failed to update policy');
+    if (!updated) throw new InternalServerErrorException('Failed to update policy');
 
     await this.audit.log({
       entity: 'governance_policies',
@@ -202,7 +317,7 @@ export class GovernanceService {
         updatedBy: actor.userId,
       })
       .returning();
-    if (!inserted) throw new Error('Failed to create approval request');
+    if (!inserted) throw new InternalServerErrorException('Failed to create approval request');
 
     await this.db.insert(approvalsAudit).values({
       approvalRequestId: inserted.id,
@@ -291,6 +406,23 @@ export class GovernanceService {
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
+
+    // Send notification to approvers
+    try {
+      const approvers = await this.getApproversForSteps(steps);
+      await this.notificationTriggers.notifyApprovalRequestCreated(id, {
+        companyId: request.companyId,
+        branchId: request.branchId,
+        title: `${request.entityType} ${request.actionType}`,
+        entityType: request.entityType,
+        entityId: request.entityId,
+        amount: this.readNumericMeta(request.metaJson, 'amount'),
+        approvers,
+      });
+    } catch (error) {
+      // Log error but don't fail the submission
+      this.logger.error('Failed to send approval request notification:', error);
+    }
 
     return this.getApprovalRequest(id);
   }
@@ -394,6 +526,34 @@ export class GovernanceService {
       }
       if (requestStatus === 'rejected') {
         await this.applyDecisionEffects(tx as NodePgDatabase<Schema>, request, 'rejected', actor, reason);
+      }
+
+      // Send notification to requester about decision
+      try {
+        if (decision === 'approve') {
+          await this.notificationTriggers.notifyApprovalApproved(requestId, {
+            companyId: request.companyId,
+            branchId: request.branchId,
+            title: `${request.entityType} ${request.actionType}`,
+            entityType: request.entityType,
+            entityId: request.entityId,
+            requesterId: request.requestedBy,
+            approvedBy: actor.userId,
+          });
+        } else {
+          await this.notificationTriggers.notifyApprovalRejected(requestId, {
+            companyId: request.companyId,
+            branchId: request.branchId,
+            title: `${request.entityType} ${request.actionType}`,
+            entityType: request.entityType,
+            entityId: request.entityId,
+            requesterId: request.requestedBy,
+            rejectedBy: actor.userId,
+            rejectionReason: reason,
+          });
+        }
+      } catch (error) {
+        this.logger.error('Failed to send approval decision notification:', error);
       }
     });
 
@@ -598,12 +758,43 @@ export class GovernanceService {
     }
 
     if (request.entityType === 'stock_adjustment' && request.actionType === 'approve') {
-      if (outcome !== 'approved') return;
       const meta = this.readObjectMeta(request.metaJson);
       const tankId = this.readString(meta, 'tankId') ?? request.entityId;
+
+      // Find the pending adjustment record linked to this approval request
+      const [pendingAdj] = await tx
+        .select({ id: adjustments.id })
+        .from(adjustments)
+        .where(and(eq(adjustments.approvalRequestId, request.id), isNull(adjustments.deletedAt)));
+
+      if (outcome !== 'approved') {
+        // Rejected: mark the pending adjustment as rejected
+        if (pendingAdj) {
+          await tx
+            .update(adjustments)
+            .set({
+              status: 'rejected',
+              notes: reason ?? 'Rejected by governance workflow',
+              updatedAt: new Date(),
+              updatedBy: actor.userId,
+            })
+            .where(eq(adjustments.id, pendingAdj.id));
+        }
+        await this.audit.log(
+          {
+            entity: 'adjustments',
+            entityId: pendingAdj?.id ?? request.entityId,
+            action: 'governance_rejected',
+            after: { status: 'rejected', source: 'governance', reason } as object,
+            userId: actor.userId,
+          },
+          tx,
+        );
+        return;
+      }
+
+      // Approved: apply the actual stock changes
       const volumeDelta = Number(this.readNumber(meta, 'volumeDelta') ?? 0);
-      const adjustmentReason = this.readString(meta, 'reason') ?? request.reason ?? 'Governed adjustment';
-      const notes = this.readString(meta, 'notes');
 
       const [tankRow] = await tx
         .select({ id: tanks.id, currentLevel: tanks.currentLevel, capacity: tanks.capacity, productId: tanks.productId })
@@ -618,22 +809,42 @@ export class GovernanceService {
         throw new ConflictException('Approved adjustment would breach tank stock boundaries');
       }
 
-      const [adj] = await tx
-        .insert(adjustments)
-        .values({
-          companyId: request.companyId,
-          branchId: request.branchId,
-          tankId,
-          adjustmentDate: new Date(),
-          volumeDelta: String(volumeDelta.toFixed(3)),
-          reason: adjustmentReason.slice(0, 64),
-          notes,
-          createdBy: request.requestedBy,
-          updatedBy: request.requestedBy,
-        })
-        .returning({ id: adjustments.id });
-
-      if (!adj) throw new Error('Failed to insert approved adjustment');
+      // Determine the adjustment record ID to use for the stock ledger reference
+      let adjId: string;
+      if (pendingAdj) {
+        // Update existing pending record to completed
+        await tx
+          .update(adjustments)
+          .set({
+            status: 'completed',
+            updatedAt: new Date(),
+            updatedBy: actor.userId,
+          })
+          .where(eq(adjustments.id, pendingAdj.id));
+        adjId = pendingAdj.id;
+      } else {
+        // Fallback: insert a new record if no pending record exists (legacy requests)
+        const adjustmentReason = this.readString(meta, 'reason') ?? request.reason ?? 'Governed adjustment';
+        const notes = this.readString(meta, 'notes');
+        const [adj] = await tx
+          .insert(adjustments)
+          .values({
+            companyId: request.companyId,
+            branchId: request.branchId,
+            tankId,
+            adjustmentDate: new Date(),
+            volumeDelta: String(volumeDelta.toFixed(3)),
+            reason: adjustmentReason.slice(0, 64),
+            notes,
+            status: 'completed',
+            approvalRequestId: request.id,
+            createdBy: request.requestedBy,
+            updatedBy: request.requestedBy,
+          })
+          .returning({ id: adjustments.id });
+        if (!adj) throw new InternalServerErrorException('Failed to insert approved adjustment');
+        adjId = adj.id;
+      }
 
       await tx
         .update(tanks)
@@ -651,7 +862,7 @@ export class GovernanceService {
         productId: tankRow.productId,
         movementType: STOCK_LEDGER_MOVEMENT_ADJUSTMENT,
         referenceType: 'adjustment',
-        referenceId: adj.id,
+        referenceId: adjId,
         quantity: String(volumeDelta.toFixed(3)),
         movementDate: new Date(),
         createdBy: actor.userId,
@@ -660,9 +871,9 @@ export class GovernanceService {
       await this.audit.log(
         {
           entity: 'adjustments',
-          entityId: adj.id,
+          entityId: adjId,
           action: 'governance_approved_create',
-          after: { id: adj.id, source: 'governance' } as object,
+          after: { id: adjId, source: 'governance' } as object,
           userId: actor.userId,
         },
         tx,
@@ -749,6 +960,12 @@ export class GovernanceService {
     const value = obj[key];
     if (!Array.isArray(value)) return [];
     return value.filter((v) => v && typeof v === 'object') as Record<string, unknown>[];
+  }
+
+  private async getApproversForSteps(steps: ApprovalPolicyStep[]): Promise<string[]> {
+    // This is a simplified implementation - in a real system you'd query users by role/permission
+    // For now, we'll return an empty array and let the notification service handle role-based recipients
+    return [];
   }
 
   private readStringMeta(meta: unknown, key: string): string | undefined {

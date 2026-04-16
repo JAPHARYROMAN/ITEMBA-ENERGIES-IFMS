@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { SanitizeHtml } from '../../../common/decorators/sanitize.decorator';
 import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class UpdateExpenseCategoryDto {
@@ -25,6 +26,7 @@ export class UpdateExpenseCategoryDto {
   name?: string;
 
   @ApiPropertyOptional({ maxLength: 512 })
+  @SanitizeHtml()
   @IsOptional()
   @IsString()
   @MaxLength(512)

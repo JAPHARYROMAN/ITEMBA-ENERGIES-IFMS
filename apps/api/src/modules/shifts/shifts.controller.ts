@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  Query,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
@@ -20,7 +11,7 @@ import { BaseListController } from '../../common/base/base-list.controller';
 import { ListQueryDto } from '../../common/dto/list-query.dto';
 import type { ListResponse } from '../../common/interfaces/response-envelope';
 import { getListParams } from '../../common/helpers/list.helper';
-import { ShiftsService, type ShiftItem } from './shifts.service';
+import { ShiftsService, type ShiftDetailItem, type ShiftItem } from './shifts.service';
 import { OpenShiftDto } from './dto/open-shift.dto';
 import { CloseShiftDto } from './dto/close-shift.dto';
 
@@ -56,9 +47,12 @@ export class ShiftsController extends BaseListController {
   @Permissions('shifts:close')
   @ApiOperation({ summary: 'Close a shift' })
   @ApiResponse({ status: 200, description: 'Shift closed' })
-  @ApiResponse({ status: 400, description: 'Closing reading < opening or variance reason required' })
+  @ApiResponse({
+    status: 400,
+    description: 'Closing reading < opening or variance reason required',
+  })
   async close(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CloseShiftDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -74,9 +68,7 @@ export class ShiftsController extends BaseListController {
   @Permissions('shifts:read')
   @ApiOperation({ summary: 'List shifts' })
   @ApiResponse({ status: 200 })
-  async list(
-    @Query() query: ListQueryDto & { status?: string },
-  ): Promise<ListResponse<ShiftItem>> {
+  async list(@Query() query: ListQueryDto): Promise<ListResponse<ShiftItem>> {
     const params = getListParams(query);
     const { data, total } = await this.shiftsService.findPage({
       page: query.page,
@@ -97,8 +89,11 @@ export class ShiftsController extends BaseListController {
   @ApiOperation({ summary: 'Get shift by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<ShiftItem> {
-    return this.shiftsService.findById(id);
+  async getById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<ShiftDetailItem> {
+    return this.shiftsService.findById(id, companyId);
   }
 
   @Post(':id/submit-for-approval')
@@ -107,7 +102,7 @@ export class ShiftsController extends BaseListController {
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 400, description: 'Shift not closed or already submitted' })
   async submitForApproval(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<ShiftItem> {
@@ -124,7 +119,7 @@ export class ShiftsController extends BaseListController {
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 400, description: 'Shift not pending approval' })
   async approve(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<ShiftItem> {

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNumber, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateProductDto {
@@ -25,6 +25,7 @@ export class CreateProductDto {
   @ApiProperty({ example: 1.45 })
   @Type(() => Number)
   @IsNumber()
+  @Min(0, { message: 'pricePerUnit must not be negative' })
   pricePerUnit!: number;
 
   @ApiPropertyOptional({ default: 'L', maxLength: 16 })

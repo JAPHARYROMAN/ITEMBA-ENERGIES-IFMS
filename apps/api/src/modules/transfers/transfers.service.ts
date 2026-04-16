@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -17,11 +22,20 @@ import { getListParams } from '../../common/helpers/list.helper';
 import { AuditService } from '../audit/audit.service';
 import type { TankToTankTransferDto } from './dto/tank-to-tank-transfer.dto';
 import type { StationToStationTransferDto } from './dto/station-to-station-transfer.dto';
+import type { UpdateTransferDto } from './dto/update-transfer.dto';
 
 type Schema = typeof schema;
 
 const TRANSFER_TYPE_TANK_TO_TANK = 'tank_to_tank';
 const TRANSFER_TYPE_STATION_TO_STATION = 'station_to_station';
+
+interface RawTankRow {
+  id: string;
+  branchId: string;
+  productId: string | null;
+  capacity: string;
+  currentLevel: string;
+}
 
 export interface TransferItem {
   id: string;
@@ -66,8 +80,10 @@ export class TransfersService {
     if (params.branchId) conditions.push(eq(transfers.branchId, params.branchId));
     if (params.companyId) conditions.push(eq(transfers.companyId, params.companyId));
     if (params.transferType) conditions.push(eq(transfers.transferType, params.transferType));
-    if (params.dateFrom) conditions.push(sql`${transfers.transferDate} >= ${params.dateFrom}::timestamptz`);
-    if (params.dateTo) conditions.push(sql`${transfers.transferDate} <= ${params.dateTo}::timestamptz`);
+    if (params.dateFrom)
+      conditions.push(sql`${transfers.transferDate} >= ${params.dateFrom}::timestamptz`);
+    if (params.dateTo)
+      conditions.push(sql`${transfers.transferDate} <= ${params.dateTo}::timestamptz`);
     const w = conditions.length > 1 ? and(...conditions) : conditions[0];
     const [data, countResult] = await Promise.all([
       this.db
@@ -89,9 +105,33 @@ export class TransfersService {
         .orderBy(desc(transfers.transferDate))
         .limit(limit)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` }).from(transfers).where(w),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(transfers)
+        .where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
+  }
+
+  async findById(id: string): Promise<TransferItem> {
+    const [row] = await this.db
+      .select({
+        id: transfers.id,
+        companyId: transfers.companyId,
+        branchId: transfers.branchId,
+        transferType: transfers.transferType,
+        fromTankId: transfers.fromTankId,
+        toTankId: transfers.toTankId,
+        quantity: transfers.quantity,
+        transferDate: transfers.transferDate,
+        reference: transfers.reference,
+        status: transfers.status,
+        createdAt: transfers.createdAt,
+      })
+      .from(transfers)
+      .where(and(eq(transfers.id, id), isNull(transfers.deletedAt)));
+    if (!row) throw new NotFoundException('Transfer not found');
+    return row;
   }
 
   async tankToTank(dto: TankToTankTransferDto, ctx: AuditContext): Promise<TransferItem> {
@@ -107,14 +147,19 @@ export class TransfersService {
       TRANSFER_TYPE_TANK_TO_TANK,
       (fromTank, toTank) => {
         if (fromTank.branchId !== toTank.branchId) {
-          throw new BadRequestException('Tank-to-tank transfer requires both tanks in the same branch');
+          throw new BadRequestException(
+            'Tank-to-tank transfer requires both tanks in the same branch',
+          );
         }
       },
       ctx,
     );
   }
 
-  async stationToStation(dto: StationToStationTransferDto, ctx: AuditContext): Promise<TransferItem> {
+  async stationToStation(
+    dto: StationToStationTransferDto,
+    ctx: AuditContext,
+  ): Promise<TransferItem> {
     if (dto.fromTankId === dto.toTankId) {
       throw new BadRequestException('From tank and to tank must be different');
     }
@@ -127,9 +172,16 @@ export class TransfersService {
       TRANSFER_TYPE_STATION_TO_STATION,
       (fromTank, toTank) => {
         if (fromTank.branchId === toTank.branchId) {
-          throw new BadRequestException('Station-to-station transfer requires tanks in different branches');
+          throw new BadRequestException(
+            'Station-to-station transfer requires tanks in different branches',
+          );
         }
-        if (fromTank.stationId !== toTank.stationId && fromTank.productId !== toTank.productId && fromTank.productId && toTank.productId) {
+        if (
+          fromTank.stationId !== toTank.stationId &&
+          fromTank.productId !== toTank.productId &&
+          fromTank.productId &&
+          toTank.productId
+        ) {
           // Optional: enforce same product for cross-station
           // Currently allow different products if needed
         }
@@ -145,62 +197,81 @@ export class TransfersService {
     transferDateStr: string | undefined,
     reference: string | undefined,
     transferType: string,
-    validate: (fromTank: { branchId: string; stationId: string; productId: string | null; capacity: string; currentLevel: string }, toTank: { branchId: string; stationId: string; productId: string | null; capacity: string; currentLevel: string }) => void,
+    validate: (
+      fromTank: {
+        branchId: string;
+        stationId: string;
+        productId: string | null;
+        capacity: string;
+        currentLevel: string;
+      },
+      toTank: {
+        branchId: string;
+        stationId: string;
+        productId: string | null;
+        capacity: string;
+        currentLevel: string;
+      },
+    ) => void,
     ctx: AuditContext,
   ): Promise<TransferItem> {
-    const [fromTankRow] = await this.db
-      .select({
-        id: tanks.id,
-        branchId: tanks.branchId,
-        productId: tanks.productId,
-        capacity: tanks.capacity,
-        currentLevel: tanks.currentLevel,
-      })
-      .from(tanks)
-      .where(and(eq(tanks.id, fromTankId), isNull(tanks.deletedAt)));
-    const [toTankRow] = await this.db
-      .select({
-        id: tanks.id,
-        branchId: tanks.branchId,
-        productId: tanks.productId,
-        capacity: tanks.capacity,
-        currentLevel: tanks.currentLevel,
-      })
-      .from(tanks)
-      .where(and(eq(tanks.id, toTankId), isNull(tanks.deletedAt)));
-
-    if (!fromTankRow) throw new NotFoundException('From tank not found');
-    if (!toTankRow) throw new NotFoundException('To tank not found');
-
-    const fromStation = await this.db.select({ stationId: branches.stationId }).from(branches).where(eq(branches.id, fromTankRow.branchId)).limit(1);
-    const toStation = await this.db.select({ stationId: branches.stationId }).from(branches).where(eq(branches.id, toTankRow.branchId)).limit(1);
-    const fromTank = {
-      ...fromTankRow,
-      stationId: fromStation[0]?.stationId ?? '',
-    };
-    const toTank = {
-      ...toTankRow,
-      stationId: toStation[0]?.stationId ?? '',
-    };
-
-    validate(fromTank, toTank);
-
-    const fromCurrent = Number(fromTankRow.currentLevel || 0);
-    if (quantity > fromCurrent) {
-      throw new BadRequestException(`From tank has insufficient stock: current ${fromCurrent}, requested ${quantity}`);
-    }
-    const toCapacity = Number(toTankRow.capacity || 0);
-    const toCurrent = Number(toTankRow.currentLevel || 0);
-    const toFree = toCapacity - toCurrent;
-    if (quantity > toFree) {
-      throw new BadRequestException(`To tank has insufficient free capacity: free ${toFree}, requested ${quantity}`);
-    }
-
     const transferDate = transferDateStr ? new Date(transferDateStr) : new Date();
 
     const [inserted] = await this.db.transaction(async (tx) => {
-      const [stationRow] = await tx.select({ companyId: stations.companyId }).from(stations).where(eq(stations.id, fromTank.stationId));
-      const companyId = stationRow?.companyId ?? '';
+      // Lock both tank rows inside the transaction to prevent concurrent overdraw
+      const fromResult = await tx.execute(
+        sql`SELECT id, branch_id AS "branchId", product_id AS "productId", capacity, current_level AS "currentLevel"
+            FROM tanks WHERE id = ${fromTankId} AND deleted_at IS NULL FOR UPDATE`,
+      );
+      const [fromTankRow] = fromResult.rows as unknown as RawTankRow[];
+      const toResult = await tx.execute(
+        sql`SELECT id, branch_id AS "branchId", product_id AS "productId", capacity, current_level AS "currentLevel"
+            FROM tanks WHERE id = ${toTankId} AND deleted_at IS NULL FOR UPDATE`,
+      );
+      const [toTankRow] = toResult.rows as unknown as RawTankRow[];
+
+      if (!fromTankRow) throw new NotFoundException('From tank not found');
+      if (!toTankRow) throw new NotFoundException('To tank not found');
+
+      const fromStation = await tx
+        .select({ stationId: branches.stationId })
+        .from(branches)
+        .where(eq(branches.id, fromTankRow.branchId))
+        .limit(1);
+      const toStation = await tx
+        .select({ stationId: branches.stationId })
+        .from(branches)
+        .where(eq(branches.id, toTankRow.branchId))
+        .limit(1);
+      const fromTank = { ...fromTankRow, stationId: fromStation[0]?.stationId };
+      const toTank = { ...toTankRow, stationId: toStation[0]?.stationId };
+
+      if (!fromTank.stationId) throw new NotFoundException('From tank station not found');
+      if (!toTank.stationId) throw new NotFoundException('To tank station not found');
+
+      validate(fromTank, toTank);
+
+      const fromCurrent = Number(fromTankRow.currentLevel || 0);
+      if (quantity > fromCurrent) {
+        throw new BadRequestException(
+          `From tank has insufficient stock: current ${fromCurrent}, requested ${quantity}`,
+        );
+      }
+      const toCapacity = Number(toTankRow.capacity || 0);
+      const toCurrent = Number(toTankRow.currentLevel || 0);
+      const toFree = toCapacity - toCurrent;
+      if (quantity > toFree) {
+        throw new BadRequestException(
+          `To tank has insufficient free capacity: free ${toFree}, requested ${quantity}`,
+        );
+      }
+
+      const [stationRow] = await tx
+        .select({ companyId: stations.companyId })
+        .from(stations)
+        .where(eq(stations.id, fromTank.stationId));
+      if (!stationRow?.companyId) throw new NotFoundException('Source station company not found');
+      const companyId = stationRow.companyId;
       const branchId = fromTankRow.branchId;
 
       const [tr] = await tx
@@ -231,21 +302,31 @@ export class TransfersService {
           status: transfers.status,
           createdAt: transfers.createdAt,
         });
-      if (!tr) throw new Error('Failed to insert transfer');
+      if (!tr) throw new InternalServerErrorException('Failed to insert transfer');
 
       const qtyStr = String(quantity.toFixed(3));
-      await tx.update(tanks).set({
-        currentLevel: String((fromCurrent - quantity).toFixed(3)),
-        updatedAt: transferDate,
-        updatedBy: ctx.userId,
-      }).where(eq(tanks.id, fromTankId));
-      await tx.update(tanks).set({
-        currentLevel: String((toCurrent + quantity).toFixed(3)),
-        updatedAt: transferDate,
-        updatedBy: ctx.userId,
-      }).where(eq(tanks.id, toTankId));
+      await tx
+        .update(tanks)
+        .set({
+          currentLevel: String((fromCurrent - quantity).toFixed(3)),
+          updatedAt: transferDate,
+          updatedBy: ctx.userId,
+        })
+        .where(eq(tanks.id, fromTankId));
+      await tx
+        .update(tanks)
+        .set({
+          currentLevel: String((toCurrent + quantity).toFixed(3)),
+          updatedAt: transferDate,
+          updatedBy: ctx.userId,
+        })
+        .where(eq(tanks.id, toTankId));
 
-      const [toBranchStation] = await tx.select({ companyId: stations.companyId }).from(branches).innerJoin(stations, eq(branches.stationId, stations.id)).where(eq(branches.id, toTankRow.branchId));
+      const [toBranchStation] = await tx
+        .select({ companyId: stations.companyId })
+        .from(branches)
+        .innerJoin(stations, eq(branches.stationId, stations.id))
+        .where(eq(branches.id, toTankRow.branchId));
       const toCompanyId = toBranchStation?.companyId ?? companyId;
 
       await tx.insert(stockLedger).values([
@@ -292,7 +373,161 @@ export class TransfersService {
       return [tr];
     });
 
-    if (!inserted) throw new Error('Transfer insert failed');
+    if (!inserted) throw new InternalServerErrorException('Transfer insert failed');
     return inserted;
+  }
+
+  async updateTransfer(id: string, dto: UpdateTransferDto, ctx: AuditContext): Promise<TransferItem> {
+    const [existing] = await this.db
+      .select()
+      .from(transfers)
+      .where(and(eq(transfers.id, id), isNull(transfers.deletedAt)));
+    if (!existing) throw new NotFoundException('Transfer not found');
+    if (existing.status === 'voided') throw new BadRequestException('Cannot update a voided transfer');
+
+    const now = new Date();
+    const updates: Record<string, unknown> = { updatedAt: now, updatedBy: ctx.userId };
+    if (dto.reference !== undefined) updates.reference = dto.reference?.trim() || null;
+
+    const [updated] = await this.db
+      .update(transfers)
+      .set(updates)
+      .where(eq(transfers.id, id))
+      .returning({
+        id: transfers.id,
+        companyId: transfers.companyId,
+        branchId: transfers.branchId,
+        transferType: transfers.transferType,
+        fromTankId: transfers.fromTankId,
+        toTankId: transfers.toTankId,
+        quantity: transfers.quantity,
+        transferDate: transfers.transferDate,
+        reference: transfers.reference,
+        status: transfers.status,
+        createdAt: transfers.createdAt,
+      });
+    if (!updated) throw new InternalServerErrorException('Failed to update transfer');
+
+    await this.audit.log({
+      entity: 'transfers',
+      entityId: id,
+      action: 'update',
+      before: existing as object,
+      after: updated as object,
+      userId: ctx.userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return updated;
+  }
+
+  async deleteTransfer(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
+    const now = new Date();
+
+    await this.db.transaction(async (tx) => {
+      const [tr] = await tx
+        .select()
+        .from(transfers)
+        .where(and(eq(transfers.id, id), isNull(transfers.deletedAt)));
+      if (!tr) throw new NotFoundException('Transfer not found');
+      if (tr.status === 'deleted' || tr.status === 'voided')
+        throw new BadRequestException('Transfer already deleted');
+
+      const qty = Number(tr.quantity);
+      if (!tr.fromTankId || !tr.toTankId || isNaN(qty)) {
+        throw new BadRequestException('Invalid transfer record cannot be reversed');
+      }
+
+      // Lock tank rows to prevent concurrent modifications
+      const fromDeleteResult = await tx.execute(
+        sql`SELECT id, current_level AS "currentLevel", product_id AS "productId", branch_id AS "branchId"
+            FROM tanks WHERE id = ${tr.fromTankId} FOR UPDATE`,
+      );
+      const [fromTankRow] = fromDeleteResult.rows as unknown as RawTankRow[];
+      const toDeleteResult = await tx.execute(
+        sql`SELECT id, current_level AS "currentLevel", product_id AS "productId", branch_id AS "branchId"
+            FROM tanks WHERE id = ${tr.toTankId} FOR UPDATE`,
+      );
+      const [toTankRow] = toDeleteResult.rows as unknown as RawTankRow[];
+
+      if (!fromTankRow || !toTankRow)
+        throw new NotFoundException('One or more associated tanks not found');
+
+      const fromCurrent = Number(fromTankRow.currentLevel || 0);
+      const toCurrent = Number(toTankRow.currentLevel || 0);
+
+      if (toCurrent < qty) {
+        throw new BadRequestException(
+          `Cannot reverse transfer: destination tank has insufficient stock (${toCurrent}) to return ${qty}`,
+        );
+      }
+      await tx
+        .update(transfers)
+        .set({ status: 'voided', deletedAt: now, updatedBy: ctx.userId, updatedAt: now })
+        .where(eq(transfers.id, id));
+
+      await tx
+        .update(tanks)
+        .set({
+          currentLevel: String((fromCurrent + qty).toFixed(3)),
+          updatedAt: now,
+          updatedBy: ctx.userId,
+        })
+        .where(eq(tanks.id, tr.fromTankId!));
+
+      await tx
+        .update(tanks)
+        .set({
+          currentLevel: String((toCurrent - qty).toFixed(3)),
+          updatedAt: now,
+          updatedBy: ctx.userId,
+        })
+        .where(eq(tanks.id, tr.toTankId!));
+
+      await tx.insert(stockLedger).values([
+        {
+          companyId: tr.companyId,
+          branchId: fromTankRow.branchId,
+          tankId: tr.fromTankId!,
+          productId: fromTankRow.productId ?? null,
+          movementType: STOCK_LEDGER_MOVEMENT_TRANSFER_IN,
+          referenceType: 'transfer_void',
+          referenceId: tr.id,
+          quantity: String(qty.toFixed(3)),
+          movementDate: now,
+          createdBy: ctx.userId,
+          updatedBy: ctx.userId,
+        },
+        {
+          companyId: tr.companyId,
+          branchId: toTankRow.branchId,
+          tankId: tr.toTankId!,
+          productId: toTankRow.productId ?? null,
+          movementType: STOCK_LEDGER_MOVEMENT_TRANSFER_OUT,
+          referenceType: 'transfer_void',
+          referenceId: tr.id,
+          quantity: `-${qty.toFixed(3)}`,
+          movementDate: now,
+          createdBy: ctx.userId,
+          updatedBy: ctx.userId,
+        },
+      ]);
+
+      await this.audit.log(
+        {
+          entity: 'transfers',
+          entityId: tr.id,
+          action: 'delete',
+          before: tr as object,
+          after: { ...tr, status: 'voided', deletedAt: now } as object,
+          userId: ctx.userId,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+        tx as NodePgDatabase<Schema>,
+      );
+    });
+
+    return { success: true };
   }
 }

@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
@@ -123,7 +124,7 @@ export class StationsService {
           status: stations.status,
           createdAt: stations.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({
         entity: 'stations',
         entityId: inserted.id,

@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+const optionalUrlFromEnv = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}, z.string().url().optional());
+
 const boolFromString = z
   .string()
   .optional()
@@ -8,11 +14,10 @@ const boolFromString = z
 
 export const frontendEnvSchema = z
   .object({
-    VITE_API_URL: z.string().url().optional(),
-    NEXT_PUBLIC_API_BASE_URL: z.string().url().optional(),
+    VITE_API_URL: optionalUrlFromEnv,
+    NEXT_PUBLIC_API_BASE_URL: optionalUrlFromEnv,
     VITE_DEMO_MODE: boolFromString,
     DEMO_MODE: boolFromString,
-    GEMINI_API_KEY: z.string().min(20).optional(),
   })
   .superRefine((env, ctx) => {
     const demoMode = env.VITE_DEMO_MODE ?? env.DEMO_MODE ?? false;
@@ -29,7 +34,6 @@ export const frontendEnvSchema = z
 export type FrontendEnv = {
   apiBaseUrl: string;
   demoMode: boolean;
-  geminiApiKey?: string;
 };
 
 export function parseFrontendEnv(raw: Record<string, string | undefined>): FrontendEnv {
@@ -37,6 +41,5 @@ export function parseFrontendEnv(raw: Record<string, string | undefined>): Front
   return {
     apiBaseUrl: (parsed.VITE_API_URL ?? parsed.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3001').replace(/\/$/, ''),
     demoMode: parsed.VITE_DEMO_MODE ?? parsed.DEMO_MODE ?? false,
-    geminiApiKey: parsed.GEMINI_API_KEY,
   };
 }

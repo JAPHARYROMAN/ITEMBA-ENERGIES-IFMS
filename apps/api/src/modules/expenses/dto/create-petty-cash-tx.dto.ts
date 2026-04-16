@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { SanitizeHtml } from '../../../common/decorators/sanitize.decorator';
 import { IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class CreatePettyCashTxDto {
@@ -24,6 +25,7 @@ export class CreatePettyCashTxDto {
   category?: string;
 
   @ApiProperty({ maxLength: 512 })
+  @SanitizeHtml()
   @IsString()
   @MaxLength(512)
   notes!: string;

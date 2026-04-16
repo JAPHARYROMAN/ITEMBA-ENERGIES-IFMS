@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ifms
-      POSTGRES_PASSWORD: change-me-staging-db-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ifms_staging
     volumes:
       - ifms_staging_pgdata:/var/lib/postgresql/data
@@ -37,7 +37,7 @@ services:
       PGHOST: postgres
       PGPORT: 5432
       PGUSER: ifms
-      PGPASSWORD: change-me-staging-db-password
+      PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ifms_staging
       BACKUP_DIR: /backups
       BACKUP_RETENTION_COUNT: 14
@@ -80,7 +80,7 @@ services:
     environment:
       PORT: 3001
       FRONTEND_ORIGIN: https://staging.example.com
-      DATABASE_URL: postgresql://ifms:change-me-staging-db-password@postgres:5432/ifms_staging
+      DATABASE_URL: postgresql://ifms:${POSTGRES_PASSWORD}@postgres:5432/ifms_staging
       ENABLE_SWAGGER: "true"
       RUN_MIGRATIONS_ON_STARTUP: "false"
       ALLOW_PROD_STARTUP_MIGRATIONS: "false"
@@ -111,7 +111,7 @@ services:
     env_file:
       - ./.env.staging
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('node:http').get('http://127.0.0.1:4173/', (r) => process.exit(r.statusCode >= 200 && r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1));\""]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 8

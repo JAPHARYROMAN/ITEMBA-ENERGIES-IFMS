@@ -12,6 +12,12 @@ export class CreateCompanyDto {
   @MaxLength(255)
   name!: string;
 
+  @ApiPropertyOptional({ example: 'USD', description: 'ISO 4217 currency code', maxLength: 3 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  currency?: string;
+
   @ApiPropertyOptional({ default: 'active', enum: ['active', 'inactive'] })
   @IsOptional()
   @IsIn(['active', 'inactive'])

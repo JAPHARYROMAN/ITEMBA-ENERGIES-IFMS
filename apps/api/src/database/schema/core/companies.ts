@@ -7,6 +7,7 @@ export const companies = pgTable(
     ...auditColumns,
     code: varchar('code', { length: 32 }).notNull(),
     name: varchar('name', { length: 255 }).notNull(),
+    currency: varchar('currency', { length: 3 }).notNull().default('USD'),
     status: varchar('status', { length: 20 }).notNull().default('active'),
   },
   (t) => [

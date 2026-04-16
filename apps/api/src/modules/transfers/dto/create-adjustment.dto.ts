@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { SanitizeHtml } from '../../../common/decorators/sanitize.decorator';
 import { IsDateString, IsNumber, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateAdjustmentDto {
@@ -17,11 +18,13 @@ export class CreateAdjustmentDto {
   volumeDelta!: number;
 
   @ApiProperty({ description: 'Reason code or short reason (required)' })
+  @SanitizeHtml()
   @IsString()
   @MaxLength(64)
   reason!: string;
 
   @ApiPropertyOptional()
+  @SanitizeHtml()
   @IsOptional()
   @IsString()
   notes?: string;

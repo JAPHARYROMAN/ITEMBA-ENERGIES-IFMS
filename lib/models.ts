@@ -129,6 +129,7 @@ export const InvoiceItemSchema = z.object({
 
 export const InvoiceSchema = z.object({
   id: z.string(),
+  invoiceNumber: z.string(),
   customerId: z.string(),
   customerName: z.string(),
   date: z.string(),

@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
@@ -55,11 +56,11 @@ export class PumpsService {
 
   async create(payload: { stationId: string; code: string; name?: string; status?: string }, auditContext: { userId?: string; ip?: string; userAgent?: string }): Promise<PumpItem> {
     const code = payload.code.trim();
-    const [ex] = await this.db.select({ id: pumps.id }).from(pumps).where(and(eq(pumps.stationId, payload.stationId), eq(pumps.code, code)));
+    const [ex] = await this.db.select({ id: pumps.id }).from(pumps).where(and(eq(pumps.stationId, payload.stationId), eq(pumps.code, code), isNull(pumps.deletedAt)));
     if (ex) throw new ConflictException(`Pump with code "${code}" already exists in this station`);
     try {
       const [ins] = await this.db.insert(pumps).values({ stationId: payload.stationId, code, name: payload.name?.trim() ?? null, status: payload.status ?? 'active' }).returning({ id: pumps.id, stationId: pumps.stationId, code: pumps.code, name: pumps.name, status: pumps.status, createdAt: pumps.createdAt });
-      if (!ins) throw new Error('Insert failed');
+      if (!ins) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({ entity: 'pumps', entityId: ins.id, action: 'create', after: ins as object, userId: auditContext.userId, ip: auditContext.ip, userAgent: auditContext.userAgent });
       return ins;
     } catch (err) {
@@ -75,7 +76,7 @@ export class PumpsService {
     if (payload.code !== undefined) {
       const code = payload.code.trim();
       if (code !== before.code) {
-        const [ex] = await this.db.select({ id: pumps.id }).from(pumps).where(and(eq(pumps.stationId, stationId), eq(pumps.code, code)));
+        const [ex] = await this.db.select({ id: pumps.id }).from(pumps).where(and(eq(pumps.stationId, stationId), eq(pumps.code, code), isNull(pumps.deletedAt)));
         if (ex) throw new ConflictException(`Pump with code "${code}" already exists in this station`);
       }
     }

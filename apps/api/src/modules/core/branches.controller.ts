@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -57,7 +57,7 @@ export class BranchesController extends BaseListController {
   @ApiOperation({ summary: 'Get branch by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<BranchItem> {
+  async getById(@Param('id', ParseUUIDPipe) id: string): Promise<BranchItem> {
     return this.branchesService.findById(id);
   }
 
@@ -84,7 +84,7 @@ export class BranchesController extends BaseListController {
   @ApiResponse({ status: 404 })
   @ApiResponse({ status: 409 })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateBranchDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -103,7 +103,7 @@ export class BranchesController extends BaseListController {
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
   async delete(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {

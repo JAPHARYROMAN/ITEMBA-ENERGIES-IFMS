@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -56,7 +56,7 @@ export class CompaniesController extends BaseListController {
   @ApiOperation({ summary: 'Get company by ID' })
   @ApiResponse({ status: 200, description: 'Company' })
   @ApiResponse({ status: 404, description: 'Company not found' })
-  async getById(@Param('id') id: string): Promise<CompanyItem> {
+  async getById(@Param('id', ParseUUIDPipe) id: string): Promise<CompanyItem> {
     return this.companiesService.findById(id);
   }
 
@@ -83,7 +83,7 @@ export class CompaniesController extends BaseListController {
   @ApiResponse({ status: 404, description: 'Company not found' })
   @ApiResponse({ status: 409, description: 'Code already exists' })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCompanyDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -102,7 +102,7 @@ export class CompaniesController extends BaseListController {
   @ApiResponse({ status: 204, description: 'Company deleted' })
   @ApiResponse({ status: 404, description: 'Company not found' })
   async delete(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {

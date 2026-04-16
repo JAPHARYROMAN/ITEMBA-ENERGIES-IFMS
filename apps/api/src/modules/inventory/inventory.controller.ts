@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -18,6 +19,7 @@ import {
 } from './inventory.service';
 import { CreateDipDto } from './dto/create-dip.dto';
 import { CreateReconciliationDto } from './dto/create-reconciliation.dto';
+import { InventoryMovementsListQueryDto } from './dto/inventory-movements-list-query.dto';
 
 @ApiTags('inventory')
 @Controller('inventory')
@@ -29,6 +31,7 @@ export class InventoryController extends BaseListController {
   }
 
   @Post('dips')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('inventory:write')
   @ApiOperation({ summary: 'Record a tank dip' })
   @ApiResponse({ status: 201 })
@@ -50,7 +53,7 @@ export class InventoryController extends BaseListController {
   @ApiOperation({ summary: 'List tank dips (date range indexed)' })
   @ApiResponse({ status: 200 })
   async listDips(
-    @Query() query: ListQueryDto & { branchId?: string; tankId?: string; dateFrom?: string; dateTo?: string },
+    @Query() query: ListQueryDto,
   ): Promise<ListResponse<TankDipItem>> {
     const params = getListParams(query);
     const { data, total } = await this.inventoryService.findDipsPage({
@@ -64,7 +67,17 @@ export class InventoryController extends BaseListController {
     return this.listResponse(data, total, { page: params.page, pageSize: params.pageSize });
   }
 
+  @Get('dips/:id')
+  @Permissions('inventory:read')
+  @ApiOperation({ summary: 'Get tank dip by ID' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Tank dip not found' })
+  async getDip(@Param('id', ParseUUIDPipe) id: string): Promise<TankDipItem> {
+    return this.inventoryService.findDipById(id);
+  }
+
   @Post('reconciliations')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('inventory:write')
   @ApiOperation({ summary: 'Create reconciliation (book vs physical stock)' })
   @ApiResponse({ status: 201 })
@@ -86,7 +99,7 @@ export class InventoryController extends BaseListController {
   @ApiOperation({ summary: 'List reconciliations (date range indexed)' })
   @ApiResponse({ status: 200 })
   async listReconciliations(
-    @Query() query: ListQueryDto & { branchId?: string; companyId?: string; status?: string; dateFrom?: string; dateTo?: string },
+    @Query() query: ListQueryDto,
   ): Promise<ListResponse<ReconciliationItem>> {
     const params = getListParams(query);
     const { data, total } = await this.inventoryService.findReconciliationsPage({
@@ -101,12 +114,21 @@ export class InventoryController extends BaseListController {
     return this.listResponse(data, total, { page: params.page, pageSize: params.pageSize });
   }
 
+  @Get('reconciliations/:id')
+  @Permissions('inventory:read')
+  @ApiOperation({ summary: 'Get reconciliation by ID' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Reconciliation not found' })
+  async getReconciliation(@Param('id', ParseUUIDPipe) id: string): Promise<ReconciliationItem> {
+    return this.inventoryService.findReconciliationById(id);
+  }
+
   @Get('variances')
   @Permissions('inventory:read')
   @ApiOperation({ summary: 'List variances (date range indexed)' })
   @ApiResponse({ status: 200 })
   async listVariances(
-    @Query() query: ListQueryDto & { branchId?: string; companyId?: string; tankId?: string; classification?: string; dateFrom?: string; dateTo?: string },
+    @Query() query: InventoryMovementsListQueryDto,
   ): Promise<ListResponse<VarianceItem>> {
     const params = getListParams(query);
     const { data, total } = await this.inventoryService.findVariancesPage({

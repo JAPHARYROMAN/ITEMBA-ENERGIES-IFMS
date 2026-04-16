@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsDateString, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateNested } from 'class-validator';
 
 export class SupplierPaymentAllocationDto {
   @ApiProperty()
@@ -29,8 +29,9 @@ export class CreateSupplierPaymentDto {
   @Min(0.001)
   amount!: number;
 
-  @ApiProperty({ example: 'bank_transfer' })
+  @ApiProperty({ example: 'bank_transfer', enum: ['cash', 'card', 'bank_transfer', 'mobile_money', 'cheque'] })
   @IsString()
+  @IsIn(['cash', 'card', 'bank_transfer', 'mobile_money', 'cheque'], { message: 'method must be one of: cash, card, bank_transfer, mobile_money, cheque' })
   @MaxLength(32)
   method!: string;
 

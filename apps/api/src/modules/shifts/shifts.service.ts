@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -26,6 +28,7 @@ import { getListParams } from '../../common/helpers/list.helper';
 import { parseSort } from '../../common/dto/sort.dto';
 import { AuditService } from '../audit/audit.service';
 import { GovernanceService } from '../governance/governance.service';
+import { NotificationTriggersService } from '../notifications/notification-triggers.service';
 import type { OpenShiftDto } from './dto/open-shift.dto';
 import type { CloseShiftDto } from './dto/close-shift.dto';
 
@@ -56,6 +59,14 @@ export interface ShiftItem {
   createdAt: Date;
 }
 
+export interface ShiftDetailItem extends ShiftItem {
+  openingMeterReadings: Array<{
+    nozzleId: string;
+    value: number;
+    pricePerUnit: number;
+  }>;
+}
+
 export interface ShiftsListParams {
   page?: number;
   pageSize?: number;
@@ -76,11 +87,14 @@ interface AuditContext {
 
 @Injectable()
 export class ShiftsService {
+  private readonly logger = new Logger(ShiftsService.name);
+
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<Schema>,
     private readonly audit: AuditService,
     private readonly config: ConfigService,
     private readonly governance: GovernanceService,
+    private readonly notificationTriggers: NotificationTriggersService,
   ) {}
 
   async findPage(params: ShiftsListParams): Promise<{ data: ShiftItem[]; total: number }> {
@@ -90,7 +104,8 @@ export class ShiftsService {
     if (params.stationId) conditions.push(eq(shifts.stationId, params.stationId));
     if (params.companyId) conditions.push(eq(shifts.companyId, params.companyId));
     if (params.status) conditions.push(eq(shifts.status, params.status));
-    if (params.dateFrom) conditions.push(sql`${shifts.startTime} >= ${params.dateFrom}::timestamptz`);
+    if (params.dateFrom)
+      conditions.push(sql`${shifts.startTime} >= ${params.dateFrom}::timestamptz`);
     if (params.dateTo) conditions.push(sql`${shifts.startTime} <= ${params.dateTo}::timestamptz`);
     const w = conditions.length > 1 ? and(...conditions) : conditions[0];
     const sortCol = shifts.startTime;
@@ -122,12 +137,17 @@ export class ShiftsService {
         .orderBy(desc(sortCol))
         .limit(limit)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` }).from(shifts).where(w),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(shifts)
+        .where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
-  async findById(id: string): Promise<ShiftItem> {
+  async findById(id: string, companyId?: string): Promise<ShiftDetailItem> {
+    const conditions = [eq(shifts.id, id), isNull(shifts.deletedAt)];
+    if (companyId) conditions.push(eq(shifts.companyId, companyId));
     const [row] = await this.db
       .select({
         id: shifts.id,
@@ -151,9 +171,28 @@ export class ShiftsService {
         createdAt: shifts.createdAt,
       })
       .from(shifts)
-      .where(and(eq(shifts.id, id), isNull(shifts.deletedAt)));
+      .where(and(...conditions));
     if (!row) throw new NotFoundException('Shift not found');
-    return row;
+
+    const openingRows = await this.db
+      .select({
+        nozzleId: meterReadings.nozzleId,
+        value: meterReadings.value,
+        pricePerUnit: meterReadings.pricePerUnit,
+      })
+      .from(meterReadings)
+      .where(
+        and(eq(meterReadings.shiftId, id), eq(meterReadings.readingType, READING_TYPE_OPENING)),
+      );
+
+    return {
+      ...row,
+      openingMeterReadings: openingRows.map((reading) => ({
+        nozzleId: reading.nozzleId,
+        value: Number(reading.value),
+        pricePerUnit: Number(reading.pricePerUnit ?? 0),
+      })),
+    };
   }
 
   async open(dto: OpenShiftDto, ctx: AuditContext): Promise<ShiftItem> {
@@ -228,7 +267,7 @@ export class ShiftsService {
           createdAt: shifts.createdAt,
         });
 
-      if (!shift) throw new Error('Failed to insert shift');
+      if (!shift) throw new InternalServerErrorException('Failed to insert shift');
 
       for (const r of dto.openingMeterReadings) {
         await tx.insert(meterReadings).values({
@@ -263,15 +302,8 @@ export class ShiftsService {
     });
   }
 
-  async close(
-    shiftId: string,
-    dto: CloseShiftDto,
-    ctx: AuditContext,
-  ): Promise<ShiftItem> {
-    const varianceThreshold = this.config.get<number>(
-      'SHIFT_VARIANCE_REQUIRE_REASON_THRESHOLD',
-      0,
-    );
+  async close(shiftId: string, dto: CloseShiftDto, ctx: AuditContext): Promise<ShiftItem> {
+    const varianceThreshold = this.config.get<number>('SHIFT_VARIANCE_REQUIRE_REASON_THRESHOLD', 0);
 
     return this.db.transaction(async (tx) => {
       const [shiftRow] = await tx
@@ -297,7 +329,10 @@ export class ShiftsService {
           ),
         );
       const openingByNozzle = new Map(
-        openingRows.map((r) => [r.nozzleId, { value: Number(r.value), pricePerUnit: r.pricePerUnit ? Number(r.pricePerUnit) : 0 }]),
+        openingRows.map((r) => [
+          r.nozzleId,
+          { value: Number(r.value), pricePerUnit: r.pricePerUnit ? Number(r.pricePerUnit) : 0 },
+        ]),
       );
 
       let totalExpected = 0;
@@ -305,9 +340,7 @@ export class ShiftsService {
       for (const closing of dto.closingMeterReadings) {
         const open = openingByNozzle.get(closing.nozzleId);
         if (!open) {
-          throw new BadRequestException(
-            `No opening reading for nozzle ${closing.nozzleId}`,
-          );
+          throw new BadRequestException(`No opening reading for nozzle ${closing.nozzleId}`);
         }
         if (closing.value < open.value) {
           throw new BadRequestException(
@@ -390,7 +423,8 @@ export class ShiftsService {
               createdAt: shifts.createdAt,
             });
 
-          if (!pending) throw new Error('Failed to set shift pending approval');
+          if (!pending)
+            throw new InternalServerErrorException('Failed to set shift pending approval');
 
           await this.audit.log(
             {
@@ -464,7 +498,7 @@ export class ShiftsService {
           createdAt: shifts.createdAt,
         });
 
-      if (!updated) throw new Error('Failed to update shift');
+      if (!updated) throw new InternalServerErrorException('Failed to update shift');
 
       await this.audit.log(
         {
@@ -479,6 +513,24 @@ export class ShiftsService {
         },
         tx as NodePgDatabase<Schema>,
       );
+
+      // Send notification for shift variance
+      try {
+        if (variance !== 0) {
+          await this.notificationTriggers.notifyShiftVariance({
+            shiftId,
+            varianceId: shiftId, // Using shiftId as varianceId for simplicity
+            varianceType: variance > 0 ? 'overage' : 'shortage',
+            varianceAmount: Math.abs(variance),
+            shiftDate: new Date(updated.startTime).toISOString(),
+            companyId: updated.companyId,
+            branchId: updated.branchId,
+            stationId: updated.stationId,
+          });
+        }
+      } catch (error) {
+        this.logger.error('Failed to send shift variance notification:', error);
+      }
 
       return updated;
     });
@@ -528,7 +580,7 @@ export class ShiftsService {
         approvedBy: shifts.approvedBy,
         createdAt: shifts.createdAt,
       });
-    if (!updated) throw new Error('Update failed');
+    if (!updated) throw new InternalServerErrorException('Failed to submit shift for approval');
     await this.audit.log({
       entity: 'shifts',
       entityId: shiftId,
@@ -584,7 +636,7 @@ export class ShiftsService {
         approvedBy: shifts.approvedBy,
         createdAt: shifts.createdAt,
       });
-    if (!updated) throw new Error('Update failed');
+    if (!updated) throw new InternalServerErrorException('Failed to approve shift');
     await this.audit.log({
       entity: 'shifts',
       entityId: shiftId,

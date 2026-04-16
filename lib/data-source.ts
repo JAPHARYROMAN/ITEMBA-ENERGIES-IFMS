@@ -51,13 +51,42 @@ function mapApiProduct(r: {
 export const setupDataSource = {
   companies: {
     list: (): Promise<Company[]> => apiSetup.companies.list() as Promise<Company[]>,
+    create: async (data: { code: string; name: string; currency?: string; status?: string }): Promise<Company> =>
+      (await apiSetup.companies.create(data)) as Company,
+    update: async (id: string, data: { code?: string; name?: string; currency?: string; status?: string }): Promise<Company> =>
+      (await apiSetup.companies.update(id, data)) as Company,
+    delete: (id: string) => apiSetup.companies.delete(id),
   },
   stations: {
     list: (): Promise<Station[]> => apiSetup.stations.list() as Promise<Station[]>,
+    create: async (data: {
+      companyId: string;
+      code: string;
+      name: string;
+      location?: string;
+      manager?: string;
+      status?: string;
+    }): Promise<Station> =>
+      (await apiSetup.stations.create(data)) as Station,
+    update: async (id: string, data: {
+      companyId?: string;
+      code?: string;
+      name?: string;
+      location?: string;
+      manager?: string;
+      status?: string;
+    }): Promise<Station> =>
+      (await apiSetup.stations.update(id, data)) as Station,
+    delete: (id: string) => apiSetup.stations.delete(id),
   },
   branches: {
     list: (stationId?: string): Promise<Branch[]> =>
       apiSetup.branches.list(stationId) as Promise<Branch[]>,
+    create: async (data: { stationId: string; code: string; name: string; status?: string }): Promise<Branch> =>
+      (await apiSetup.branches.create(data)) as Branch,
+    update: async (id: string, data: { stationId?: string; code?: string; name?: string; status?: string }): Promise<Branch> =>
+      (await apiSetup.branches.update(id, data)) as Branch,
+    delete: (id: string) => apiSetup.branches.delete(id),
   },
   products: {
     list: (): Promise<Product[]> => apiSetup.products.list().then((rows) => rows.map(mapApiProduct)),
@@ -73,6 +102,7 @@ export const setupDataSource = {
       const r = await apiSetup.products.create(data);
       return mapApiProduct(r);
     },
+    delete: (id: string) => apiSetup.products.delete(id),
   },
   tanks: {
     list: (stationId?: string): Promise<Tank[]> =>
@@ -91,10 +121,12 @@ export const setupDataSource = {
       });
       return mapApiTank({ ...r, stationId: data.stationId });
     },
+    delete: (id: string) => apiSetup.tanks.delete(id),
   },
   pumps: {
     list: (stationId?: string): Promise<{ id: string; stationId: string; code: string; name: string | null; status: string }[]> =>
       apiSetup.pumps.list().then((rows) => (stationId ? rows.filter((p) => p.stationId === stationId) : rows)),
+    delete: (id: string) => apiSetup.pumps.delete(id),
   },
   nozzles: {
     list: (stationId?: string): Promise<Nozzle[]> =>
@@ -135,5 +167,6 @@ export const setupDataSource = {
         status: (r.status.toLowerCase() === 'inactive' ? 'Inactive' : 'Active') as Nozzle['status'],
       };
     },
+    delete: (id: string) => apiSetup.nozzles.delete(id),
   },
 };

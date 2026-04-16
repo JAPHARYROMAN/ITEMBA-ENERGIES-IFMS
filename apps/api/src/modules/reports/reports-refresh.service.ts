@@ -72,20 +72,24 @@ export class ReportsRefreshService {
 
       const viewsRefreshed: string[] = [];
       for (const name of MATERIALIZED_VIEWS) {
+        if (!(MATERIALIZED_VIEWS as readonly string[]).includes(name)) {
+          throw new Error(`Invalid materialized view name: ${name}`);
+        }
+        const safeName = name.replace(/[^a-z0-9_]/gi, '');
         try {
-          await client.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${name}`);
-          viewsRefreshed.push(name);
+          await client.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${safeName}`);
+          viewsRefreshed.push(safeName);
         } catch (err) {
           this.logger.warn(
-            `REFRESH MATERIALIZED VIEW CONCURRENTLY ${name} failed: ${(err as Error).message}. Trying non-concurrent.`,
+            `REFRESH MATERIALIZED VIEW CONCURRENTLY ${safeName} failed: ${(err as Error).message}. Trying non-concurrent.`,
             'ReportsRefresh',
           );
           try {
-            await client.query(`REFRESH MATERIALIZED VIEW ${name}`);
-            viewsRefreshed.push(name);
+            await client.query(`REFRESH MATERIALIZED VIEW ${safeName}`);
+            viewsRefreshed.push(safeName);
           } catch (err2) {
             this.logger.error(
-              `REFRESH MATERIALIZED VIEW ${name} failed: ${(err2 as Error).message}`,
+              `REFRESH MATERIALIZED VIEW ${safeName} failed: ${(err2 as Error).message}`,
               (err2 as Error).stack,
               'ReportsRefresh',
             );
@@ -100,7 +104,9 @@ export class ReportsRefreshService {
         durationMs: Date.now() - start,
       };
     } finally {
-      await client.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_ID]).catch(() => {});
+      await client.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_ID]).catch((err) => {
+        this.logger.warn(`Failed to release advisory lock: ${(err as Error).message}`, 'ReportsRefresh');
+      });
       client.release();
     }
   }

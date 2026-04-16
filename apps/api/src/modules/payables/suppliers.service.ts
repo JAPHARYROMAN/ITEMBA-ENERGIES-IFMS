@@ -1,10 +1,12 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
 import { suppliers } from '../../database/schema/payables/suppliers';
+import { supplierInvoices } from '../../database/schema/payables/supplier-invoices';
 import { getListParams } from '../../common/helpers/list.helper';
 import { throwConflictIfUniqueViolation } from '../../common/utils/db-errors';
 import { AuditService } from '../audit/audit.service';
@@ -72,12 +74,17 @@ export class SuppliersService {
         .orderBy(desc(suppliers.createdAt))
         .limit(limit)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` }).from(suppliers).where(w),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(suppliers)
+        .where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
-  async findById(id: string): Promise<SupplierItem> {
+  async findById(id: string, companyId?: string): Promise<SupplierItem> {
+    const conditions = [eq(suppliers.id, id), isNull(suppliers.deletedAt)];
+    if (companyId) conditions.push(eq(suppliers.companyId, companyId));
     const [row] = await this.db
       .select({
         id: suppliers.id,
@@ -91,7 +98,7 @@ export class SuppliersService {
         createdAt: suppliers.createdAt,
       })
       .from(suppliers)
-      .where(and(eq(suppliers.id, id), isNull(suppliers.deletedAt)));
+      .where(and(...conditions));
     if (!row) throw new NotFoundException('Supplier not found');
     return row;
   }
@@ -132,7 +139,7 @@ export class SuppliersService {
           status: suppliers.status,
           createdAt: suppliers.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({
         entity: 'suppliers',
         entityId: inserted.id,
@@ -144,14 +151,23 @@ export class SuppliersService {
       });
       return inserted;
     } catch (err) {
-      throwConflictIfUniqueViolation(err, `Supplier with code "${code}" already exists in this company`);
+      throwConflictIfUniqueViolation(
+        err,
+        `Supplier with code "${code}" already exists in this company`,
+      );
       throw err;
     }
   }
 
   async update(
     id: string,
-    payload: Partial<{ code: string; name: string; category: string; rating: string; status: string }>,
+    payload: Partial<{
+      code: string;
+      name: string;
+      category: string;
+      rating: string;
+      status: string;
+    }>,
     ctx: AuditContext,
   ): Promise<SupplierItem> {
     const before = await this.findById(id);
@@ -175,7 +191,8 @@ export class SuppliersService {
             isNull(suppliers.deletedAt),
           ),
         );
-      if (existing) throw new ConflictException(`Supplier with code "${payload.code}" already exists`);
+      if (existing)
+        throw new ConflictException(`Supplier with code "${payload.code}" already exists`);
     }
     try {
       const [updated] = await this.db
@@ -213,6 +230,12 @@ export class SuppliersService {
 
   async remove(id: string, ctx: AuditContext): Promise<void> {
     const before = await this.findById(id);
+    const [dep] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(supplierInvoices)
+      .where(and(eq(supplierInvoices.supplierId, id), isNull(supplierInvoices.deletedAt)));
+    if (Number(dep.count) > 0)
+      throw new BadRequestException(`Cannot delete supplier: has ${dep.count} active invoice(s)`);
     await this.db
       .update(suppliers)
       .set({

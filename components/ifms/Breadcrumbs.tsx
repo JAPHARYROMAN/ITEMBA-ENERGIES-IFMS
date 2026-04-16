@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { ChevronRight, Home } from 'lucide-react';
 // Fix: Correctly importing useLocation and Link from react-router-dom
@@ -36,4 +35,4 @@ const Breadcrumbs: React.FC = () => {
   );
 };
 
-export default Breadcrumbs;
+export default React.memo(Breadcrumbs);

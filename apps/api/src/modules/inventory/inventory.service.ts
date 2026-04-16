@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -12,6 +12,7 @@ import { stations } from '../../database/schema/core/stations';
 import { tanks } from '../../database/schema/setup/tanks';
 import { getListParams } from '../../common/helpers/list.helper';
 import { AuditService } from '../audit/audit.service';
+import { NotificationTriggersService } from '../notifications/notification-triggers.service';
 import type { CreateDipDto } from './dto/create-dip.dto';
 import type { CreateReconciliationDto } from './dto/create-reconciliation.dto';
 
@@ -94,9 +95,12 @@ interface AuditContext {
 
 @Injectable()
 export class InventoryService {
+  private readonly logger = new Logger(InventoryService.name);
+
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<Schema>,
     private readonly audit: AuditService,
+    private readonly notificationTriggers: NotificationTriggersService,
   ) {}
 
   async createDip(dto: CreateDipDto, ctx: AuditContext): Promise<TankDipItem> {
@@ -144,7 +148,7 @@ export class InventoryService {
         createdAt: tankDips.createdAt,
       });
 
-    if (!inserted) throw new Error('Failed to insert dip');
+    if (!inserted) throw new InternalServerErrorException('Failed to insert dip');
     await this.audit.log({
       entity: 'tank_dips',
       entityId: inserted.id,
@@ -186,6 +190,25 @@ export class InventoryService {
       this.db.select({ count: sql<number>`count(*)::int` }).from(tankDips).where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
+  }
+
+  async findDipById(id: string): Promise<TankDipItem> {
+    const [row] = await this.db
+      .select({
+        id: tankDips.id,
+        companyId: tankDips.companyId,
+        branchId: tankDips.branchId,
+        tankId: tankDips.tankId,
+        dipDate: tankDips.dipDate,
+        volume: tankDips.volume,
+        waterLevel: tankDips.waterLevel,
+        temperature: tankDips.temperature,
+        createdAt: tankDips.createdAt,
+      })
+      .from(tankDips)
+      .where(and(eq(tankDips.id, id), isNull(tankDips.deletedAt)));
+    if (!row) throw new NotFoundException('Tank dip not found');
+    return row;
   }
 
   async createReconciliation(dto: CreateReconciliationDto, ctx: AuditContext): Promise<ReconciliationItem> {
@@ -242,7 +265,7 @@ export class InventoryService {
         createdAt: reconciliations.createdAt,
       });
 
-    if (!inserted) throw new Error('Failed to insert reconciliation');
+    if (!inserted) throw new InternalServerErrorException('Failed to insert reconciliation');
     await this.audit.log({
       entity: 'reconciliations',
       entityId: inserted.id,
@@ -279,6 +302,23 @@ export class InventoryService {
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
+
+        // Send notification for critical shrinkage variance
+        try {
+          if (classification === 'shrinkage' && Math.abs(variance) > 100) { // Threshold: 100L variance
+            await this.notificationTriggers.notifyShrinkageVariance({
+              id: varRow.id,
+              companyId: station.companyId,
+              branchId: dto.branchId,
+              productId: '',
+              variancePercentage: Math.abs((variance / expectedVolume) * 100),
+              thresholdValue: 100,
+              productName: 'Station Reconciliation',
+            });
+          }
+        } catch (error) {
+          this.logger.error('Failed to send shrinkage variance notification:', error);
+        }
       }
     }
 
@@ -317,6 +357,27 @@ export class InventoryService {
       this.db.select({ count: sql<number>`count(*)::int` }).from(reconciliations).where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
+  }
+
+  async findReconciliationById(id: string): Promise<ReconciliationItem> {
+    const [row] = await this.db
+      .select({
+        id: reconciliations.id,
+        companyId: reconciliations.companyId,
+        branchId: reconciliations.branchId,
+        reconciliationDate: reconciliations.reconciliationDate,
+        shiftId: reconciliations.shiftId,
+        expectedVolume: reconciliations.expectedVolume,
+        actualVolume: reconciliations.actualVolume,
+        variance: reconciliations.variance,
+        notes: reconciliations.notes,
+        status: reconciliations.status,
+        createdAt: reconciliations.createdAt,
+      })
+      .from(reconciliations)
+      .where(and(eq(reconciliations.id, id), isNull(reconciliations.deletedAt)));
+    if (!row) throw new NotFoundException('Reconciliation not found');
+    return row;
   }
 
   async findVariancesPage(params: VariancesListParams): Promise<{ data: VarianceItem[]; total: number }> {

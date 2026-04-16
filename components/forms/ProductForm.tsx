@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { useForm, FormProvider } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -7,6 +8,7 @@ import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
 import { setupDataSource } from '../../lib/data-source';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
+import { permissionGroups } from '../../lib/permissions';
 
 const schema = z.object({
   companyId: z.string().min(1, 'Company is required'),
@@ -27,17 +29,24 @@ interface ProductFormProps {
 }
 
 export const ProductForm: React.FC<ProductFormProps> = ({ onSuccess, onCancel, initialData }) => {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { addToast } = useAppStore();
 
-  const { data: companies } = useQuery({ queryKey: ['companies'], queryFn: setupDataSource.companies.list });
+  const { data: companies } = useQuery({
+    queryKey: ['companies'],
+    queryFn: setupDataSource.companies.list,
+  });
 
   const methods = useForm<ProductFormData>({
     resolver: zodResolver(schema),
     defaultValues: initialData ?? { status: 'active', unit: 'L' },
   });
 
-  const { handleSubmit, formState: { isSubmitting, isDirty } } = methods;
+  const {
+    handleSubmit,
+    formState: { isSubmitting, isDirty },
+  } = methods;
 
   const mutation = useMutation({
     mutationFn: (data: ProductFormData) =>
@@ -52,7 +61,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({ onSuccess, onCancel, i
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
-      addToast('Product created successfully', 'success');
+      addToast(t('forms.saveSuccess', { entity: 'Product' }), 'success');
       onSuccess();
     },
     onError: (err: any) => {
@@ -70,8 +79,12 @@ export const ProductForm: React.FC<ProductFormProps> = ({ onSuccess, onCancel, i
           description="Product catalog entry"
           status={mutation.isPending ? 'loading' : 'idle'}
           actions={
-            <PermissionGuard>
-              <button type="button" onClick={onCancel} className="px-5 py-2.5 text-xs font-black uppercase tracking-widest text-muted-foreground hover:bg-muted rounded-xl transition-all">
+            <PermissionGuard permissions={permissionGroups.setupWrite}>
+              <button
+                type="button"
+                onClick={onCancel}
+                className="px-5 py-2.5 text-xs font-black uppercase tracking-widest text-muted-foreground hover:bg-muted rounded-xl transition-all"
+              >
                 Cancel
               </button>
               <button
@@ -118,4 +131,4 @@ export const ProductForm: React.FC<ProductFormProps> = ({ onSuccess, onCancel, i
       </form>
     </FormProvider>
   );
-}
+};

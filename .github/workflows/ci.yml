@@ -1,11 +1,13 @@
 name: CI
 
 on:
+  push:
+    branches: [main, master]
   pull_request:
     branches: ["**"]
 
 jobs:
-  pr-checks:
+  lint-and-typecheck:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,9 +31,6 @@ jobs:
       - name: Typecheck web
         run: npx tsc --noEmit
 
-      - name: Build web
-        run: npm run build
-
       - name: Install API deps
         run: npm ci
         working-directory: apps/api
@@ -44,10 +43,150 @@ jobs:
         run: npx tsc -p tsconfig.json --noEmit
         working-directory: apps/api
 
-      - name: Unit tests api
-        run: npm test -- --testPathIgnorePatterns=test/
+  test:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/api/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npx vitest run
+
+      - name: Install API deps
+        run: npm ci
+        working-directory: apps/api
+
+      - name: Run API unit tests
+        run: npm test -- --testPathIgnorePatterns=test/ --coverage
+        working-directory: apps/api
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ifms
+          POSTGRES_PASSWORD: ifms_test
+          POSTGRES_DB: ifms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ifms"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+
+      - name: Install API deps
+        run: npm ci
+        working-directory: apps/api
+
+      - name: Run database migrations
+        run: npx drizzle-kit push
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://ifms:ifms_test@localhost:5432/ifms_test
+
+      - name: Run E2E tests
+        run: npm test -- --testPathPattern=test/ --forceExit --detectOpenHandles
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql://ifms:ifms_test@localhost:5432/ifms_test
+          JWT_ACCESS_SECRET: ci-test-secret-32chars-minimum!!
+          JWT_REFRESH_SECRET: ci-test-refresh-secret-32chars!!
+          NODE_ENV: test
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/api/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build web
+        run: npm run build
+
+      - name: Install API deps
+        run: npm ci
         working-directory: apps/api
 
       - name: Build api
         run: npm run build
         working-directory: apps/api
+
+      - name: Check migrations are up to date
+        run: npx drizzle-kit generate --check
+        working-directory: apps/api
+
+  security:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/api/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=high
+
+      - name: Install API deps
+        run: npm ci
+        working-directory: apps/api
+
+      - name: Audit API dependencies (non-blocking pending Nest 11 upgrade)
+        run: npm audit --audit-level=high
+        working-directory: apps/api
+        continue-on-error: true
+
+      - name: Summarize API audit status
+        if: always()
+        run: |
+          echo "API dependency audit is temporarily non-blocking." >> $GITHUB_STEP_SUMMARY
+          echo "Remaining high-severity findings require the planned Nest 11, bcrypt 6, and drizzle-kit upgrade path." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,172 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag or commit SHA to deploy (e.g. v1.2.0 or sha-abc1234)'
+        required: true
+        type: string
+      skip_smoke:
+        description: 'Skip post-deploy smoke tests'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Verify CI passed for this ref
+        run: |
+          echo "Deploying ref: ${{ inputs.tag }}"
+          echo "Operator: ${{ github.actor }}"
+          echo "Triggered at: $(date -u)"
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: production
+    outputs:
+      api_image: ${{ steps.set-outputs.outputs.api_image }}
+      web_image: ${{ steps.set-outputs.outputs.web_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./apps/api
+          file: ./apps/api/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ifms-api:${{ inputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/ifms-api:production
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/ifms-web:${{ inputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/ifms-web:production
+
+      - name: Set image outputs
+        id: set-outputs
+        run: |
+          echo "api_image=ghcr.io/${{ github.repository_owner }}/ifms-api:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "web_image=ghcr.io/${{ github.repository_owner }}/ifms-web:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+  backup-database:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+    steps:
+      - name: Create pre-deploy database backup
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.PROD_APP_PATH }}"
+            BACKUP_FILE="backups/pre-deploy-$(date +%Y%m%d-%H%M%S).sql.gz"
+            mkdir -p backups
+            docker compose -f docker-compose.production.yml exec -T postgres pg_dump -U ifms ifms | gzip > "$BACKUP_FILE"
+            echo "Backup created: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
+
+  migrate-production:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, backup-database]
+    environment: production
+    steps:
+      - name: Run database migrations on production
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.PROD_APP_PATH }}"
+            git fetch origin
+            git checkout "${{ inputs.tag }}" || git checkout "origin/${{ inputs.tag }}"
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            export API_IMAGE="${{ needs.build-and-push.outputs.api_image }}"
+            export WEB_IMAGE="${{ needs.build-and-push.outputs.web_image }}"
+            export COMPOSE_FILE="docker-compose.production.yml"
+            export MIGRATION_SERVICE="api"
+            export MIGRATION_CMD="npm run db:migrate:ci"
+            bash scripts/migrate.sh
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, migrate-production]
+    environment: production
+    steps:
+      - name: Pull and restart production services
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.PROD_APP_PATH }}"
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            export API_IMAGE="${{ needs.build-and-push.outputs.api_image }}"
+            export WEB_IMAGE="${{ needs.build-and-push.outputs.web_image }}"
+            docker compose -f docker-compose.production.yml pull api web nginx
+            docker compose -f docker-compose.production.yml up -d postgres api web nginx
+            echo "Production deploy complete for ${{ inputs.tag }}"
+
+  smoke-tests:
+    if: ${{ !inputs.skip_smoke }}
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Run production smoke tests
+        env:
+          SMOKE_BASE_URL: ${{ secrets.PROD_BASE_URL }}
+          SMOKE_STAGING: "false"
+        run: |
+          chmod +x scripts/smoke-test.sh
+          bash scripts/smoke-test.sh "$SMOKE_BASE_URL" "$SMOKE_STAGING"

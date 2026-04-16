@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Inject } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { stockLedger } from '../../database/schema/inventory/stock-ledger';
 import { getListParams } from '../../common/helpers/list.helper';
 import { AuditService } from '../audit/audit.service';
 import type { CreateDeliveryDto } from './dto/create-delivery.dto';
+import type { UpdateDeliveryDto } from './dto/update-delivery.dto';
 import type { ReceiveGrnDto } from './dto/receive-grn.dto';
 
 type Schema = typeof schema;
@@ -83,8 +85,10 @@ export class DeliveriesService {
     if (params.branchId) conditions.push(eq(deliveries.branchId, params.branchId));
     if (params.companyId) conditions.push(eq(deliveries.companyId, params.companyId));
     if (params.status) conditions.push(eq(deliveries.status, params.status));
-    if (params.dateFrom) conditions.push(sql`${deliveries.expectedDate} >= ${params.dateFrom}::timestamptz`);
-    if (params.dateTo) conditions.push(sql`${deliveries.expectedDate} <= ${params.dateTo}::timestamptz`);
+    if (params.dateFrom)
+      conditions.push(sql`${deliveries.expectedDate} >= ${params.dateFrom}::timestamptz`);
+    if (params.dateTo)
+      conditions.push(sql`${deliveries.expectedDate} <= ${params.dateTo}::timestamptz`);
     const w = conditions.length > 1 ? and(...conditions) : conditions[0];
     const [data, countResult] = await Promise.all([
       this.db
@@ -110,12 +114,17 @@ export class DeliveriesService {
         .orderBy(desc(deliveries.createdAt))
         .limit(limit)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` }).from(deliveries).where(w),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(deliveries)
+        .where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
-  async findById(id: string): Promise<DeliveryDetail> {
+  async findById(id: string, companyId?: string): Promise<DeliveryDetail> {
+    const conditions = [eq(deliveries.id, id), isNull(deliveries.deletedAt)];
+    if (companyId) conditions.push(eq(deliveries.companyId, companyId));
     const [row] = await this.db
       .select({
         id: deliveries.id,
@@ -135,13 +144,10 @@ export class DeliveriesService {
         createdAt: deliveries.createdAt,
       })
       .from(deliveries)
-      .where(and(eq(deliveries.id, id), isNull(deliveries.deletedAt)));
+      .where(and(...conditions));
     if (!row) throw new NotFoundException('Delivery not found');
 
-    const [grnRow] = await this.db
-      .select()
-      .from(grns)
-      .where(eq(grns.deliveryId, id));
+    const [grnRow] = await this.db.select().from(grns).where(eq(grns.deliveryId, id));
     let grn: DeliveryDetail['grn'];
     if (grnRow) {
       const allocs = await this.db
@@ -208,7 +214,7 @@ export class DeliveriesService {
         status: deliveries.status,
         createdAt: deliveries.createdAt,
       });
-    if (!inserted) throw new Error('Failed to insert delivery');
+    if (!inserted) throw new InternalServerErrorException('Failed to insert delivery');
     await this.audit.log({
       entity: 'deliveries',
       entityId: inserted.id,
@@ -221,8 +227,73 @@ export class DeliveriesService {
     return inserted;
   }
 
-  async receiveGrn(deliveryId: string, dto: ReceiveGrnDto, ctx: AuditContext): Promise<DeliveryDetail> {
-    const varianceThreshold = this.config.get<number>('DELIVERY_VARIANCE_REQUIRE_REASON_THRESHOLD', 0);
+  async updateDelivery(
+    id: string,
+    dto: UpdateDeliveryDto,
+    ctx: AuditContext,
+  ): Promise<DeliveryItem> {
+    const [existing] = await this.db
+      .select({ id: deliveries.id, status: deliveries.status })
+      .from(deliveries)
+      .where(and(eq(deliveries.id, id), isNull(deliveries.deletedAt)));
+    if (!existing) throw new NotFoundException('Delivery not found');
+    if (existing.status === DELIVERY_STATUS_COMPLETED) {
+      throw new BadRequestException('Cannot update a delivery that has already been received (GRN completed)');
+    }
+
+    const updates: Record<string, unknown> = { updatedAt: new Date(), updatedBy: ctx.userId };
+    if (dto.deliveryNote !== undefined) updates.deliveryNote = dto.deliveryNote.trim();
+    if (dto.supplierId !== undefined) updates.supplierId = dto.supplierId;
+    if (dto.vehicleNo !== undefined) updates.vehicleNo = dto.vehicleNo?.trim() || null;
+    if (dto.driverName !== undefined) updates.driverName = dto.driverName?.trim() || null;
+    if (dto.productId !== undefined) updates.productId = dto.productId;
+    if (dto.orderedQty !== undefined) updates.orderedQty = String(dto.orderedQty);
+    if (dto.expectedDate !== undefined) updates.expectedDate = new Date(dto.expectedDate);
+
+    const [updated] = await this.db
+      .update(deliveries)
+      .set(updates)
+      .where(eq(deliveries.id, id))
+      .returning({
+        id: deliveries.id,
+        companyId: deliveries.companyId,
+        branchId: deliveries.branchId,
+        deliveryNote: deliveries.deliveryNote,
+        supplierId: deliveries.supplierId,
+        vehicleNo: deliveries.vehicleNo,
+        driverName: deliveries.driverName,
+        productId: deliveries.productId,
+        orderedQty: deliveries.orderedQty,
+        expectedDate: deliveries.expectedDate,
+        receivedQty: deliveries.receivedQty,
+        density: deliveries.density,
+        temperature: deliveries.temperature,
+        status: deliveries.status,
+        createdAt: deliveries.createdAt,
+      });
+    if (!updated) throw new InternalServerErrorException('Failed to update delivery');
+
+    await this.audit.log({
+      entity: 'deliveries',
+      entityId: id,
+      action: 'update',
+      after: updated as object,
+      userId: ctx.userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return updated;
+  }
+
+  async receiveGrn(
+    deliveryId: string,
+    dto: ReceiveGrnDto,
+    ctx: AuditContext,
+  ): Promise<DeliveryDetail> {
+    const varianceThreshold = this.config.get<number>(
+      'DELIVERY_VARIANCE_REQUIRE_REASON_THRESHOLD',
+      0,
+    );
 
     const allocationSum = dto.allocations.reduce((s, a) => s + a.quantity, 0);
     const receivedQty = dto.receivedQty;
@@ -266,7 +337,9 @@ export class DeliveriesService {
           throw new BadRequestException(`Tank ${alloc.tankId} does not belong to delivery branch`);
         }
         if (delivery.productId && tank.productId !== delivery.productId) {
-          throw new BadRequestException(`Tank ${alloc.tankId} product does not match delivery product`);
+          throw new BadRequestException(
+            `Tank ${alloc.tankId} product does not match delivery product`,
+          );
         }
         const capacity = Number(tank.capacity);
         const current = Number(tank.currentLevel || 0);
@@ -296,7 +369,7 @@ export class DeliveriesService {
         })
         .returning({ id: grns.id });
 
-      if (!grn) throw new Error('Failed to insert GRN');
+      if (!grn) throw new InternalServerErrorException('Failed to insert GRN');
 
       for (const alloc of dto.allocations) {
         await tx.insert(grnAllocations).values({
@@ -308,16 +381,24 @@ export class DeliveriesService {
 
       for (const alloc of dto.allocations) {
         const [tank] = await tx
-          .select({ id: tanks.id, branchId: tanks.branchId, productId: tanks.productId, currentLevel: tanks.currentLevel })
+          .select({
+            id: tanks.id,
+            branchId: tanks.branchId,
+            productId: tanks.productId,
+            currentLevel: tanks.currentLevel,
+          })
           .from(tanks)
           .where(eq(tanks.id, alloc.tankId));
         if (tank) {
           const newLevel = Number(tank.currentLevel || 0) + alloc.quantity;
-          await tx.update(tanks).set({
-            currentLevel: String(newLevel.toFixed(3)),
-            updatedAt: receivedAt,
-            updatedBy: ctx.userId,
-          }).where(eq(tanks.id, alloc.tankId));
+          await tx
+            .update(tanks)
+            .set({
+              currentLevel: String(newLevel.toFixed(3)),
+              updatedAt: receivedAt,
+              updatedBy: ctx.userId,
+            })
+            .where(eq(tanks.id, alloc.tankId));
           await tx.insert(stockLedger).values({
             companyId: delivery.companyId,
             branchId: tank.branchId,
@@ -373,5 +454,98 @@ export class DeliveriesService {
       );
     });
     return this.findById(deliveryId);
+  }
+
+  async deleteDelivery(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
+    const [delivery] = await this.db
+      .select()
+      .from(deliveries)
+      .where(and(eq(deliveries.id, id), isNull(deliveries.deletedAt)));
+    if (!delivery) throw new NotFoundException('Delivery not found');
+    if (delivery.status === 'voided' || delivery.status === 'deleted')
+      throw new BadRequestException('Delivery already voided');
+
+    const now = new Date();
+
+    await this.db.transaction(async (tx) => {
+      if (delivery.status === DELIVERY_STATUS_COMPLETED) {
+        // Reverse GRN and stock ledger
+        const [grn] = await tx.select().from(grns).where(eq(grns.deliveryId, id));
+        if (grn) {
+          const allocs = await tx
+            .select()
+            .from(grnAllocations)
+            .where(eq(grnAllocations.grnId, grn.id));
+
+          for (const alloc of allocs) {
+            const [tank] = await tx
+              .select({
+                id: tanks.id,
+                branchId: tanks.branchId,
+                productId: tanks.productId,
+                currentLevel: tanks.currentLevel,
+              })
+              .from(tanks)
+              .where(eq(tanks.id, alloc.tankId));
+            if (tank) {
+              const qty = Number(alloc.quantity);
+              const newLevel = Number(tank.currentLevel || 0) - qty;
+              await tx
+                .update(tanks)
+                .set({
+                  currentLevel: String(newLevel.toFixed(3)),
+                  updatedAt: now,
+                  updatedBy: ctx.userId,
+                })
+                .where(eq(tanks.id, alloc.tankId));
+
+              await tx.insert(stockLedger).values({
+                companyId: delivery.companyId,
+                branchId: tank.branchId,
+                tankId: alloc.tankId,
+                productId: tank.productId ?? null,
+                movementType: 'grn_void',
+                referenceType: 'grn_void',
+                referenceId: grn.id,
+                quantity: `-${qty.toFixed(3)}`,
+                movementDate: now,
+                createdBy: ctx.userId,
+                updatedBy: ctx.userId,
+              });
+            }
+          }
+          await tx
+            .update(grns)
+            .set({ status: 'voided', updatedBy: ctx.userId })
+            .where(eq(grns.id, grn.id));
+        }
+      }
+
+      await tx
+        .update(deliveries)
+        .set({
+          status: 'voided',
+          deletedAt: now,
+          updatedAt: now,
+          updatedBy: ctx.userId,
+        })
+        .where(eq(deliveries.id, id));
+
+      await this.audit.log(
+        {
+          entity: 'deliveries',
+          entityId: id,
+          action: 'delete',
+          before: delivery as object,
+          after: { ...delivery, status: 'voided', deletedAt: now } as object,
+          userId: ctx.userId,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+        tx as NodePgDatabase<Schema>,
+      );
+    });
+
+    return { success: true };
   }
 }

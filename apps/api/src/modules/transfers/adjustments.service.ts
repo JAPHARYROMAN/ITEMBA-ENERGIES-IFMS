@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
@@ -25,6 +26,8 @@ export interface AdjustmentItem {
   volumeDelta: string;
   reason: string;
   notes: string | null;
+  status: string;
+  approvalRequestId: string | null;
   createdAt: Date;
 }
 
@@ -72,6 +75,8 @@ export class AdjustmentsService {
           volumeDelta: adjustments.volumeDelta,
           reason: adjustments.reason,
           notes: adjustments.notes,
+          status: adjustments.status,
+          approvalRequestId: adjustments.approvalRequestId,
           createdAt: adjustments.createdAt,
         })
         .from(adjustments)
@@ -82,6 +87,27 @@ export class AdjustmentsService {
       this.db.select({ count: sql<number>`count(*)::int` }).from(adjustments).where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
+  }
+
+  async findById(id: string): Promise<AdjustmentItem> {
+    const [row] = await this.db
+      .select({
+        id: adjustments.id,
+        companyId: adjustments.companyId,
+        branchId: adjustments.branchId,
+        tankId: adjustments.tankId,
+        adjustmentDate: adjustments.adjustmentDate,
+        volumeDelta: adjustments.volumeDelta,
+        reason: adjustments.reason,
+        notes: adjustments.notes,
+        status: adjustments.status,
+        approvalRequestId: adjustments.approvalRequestId,
+        createdAt: adjustments.createdAt,
+      })
+      .from(adjustments)
+      .where(and(eq(adjustments.id, id), isNull(adjustments.deletedAt)));
+    if (!row) throw new NotFoundException('Adjustment not found');
+    return row;
   }
 
   async create(dto: CreateAdjustmentDto, ctx: AuditContext): Promise<AdjustmentItem> {
@@ -125,6 +151,7 @@ export class AdjustmentsService {
     const adjustmentDate = dto.adjustmentDate ? new Date(dto.adjustmentDate) : new Date();
     const volumeDeltaStr = String(dto.volumeDelta.toFixed(3));
 
+    // Check if governance approval is required for this adjustment amount
     const governanceRequest = await this.governance.initiateControlledActionRequest(
       {
         companyId: station.companyId,
@@ -138,22 +165,17 @@ export class AdjustmentsService {
           tankId: dto.tankId,
           volumeDelta: dto.volumeDelta,
           adjustmentDate: adjustmentDate.toISOString(),
+          notes: dto.notes?.trim() || null,
+          reason: dto.reason.trim(),
         },
       },
       { userId: ctx.userId, permissions: [] },
       { ip: ctx.ip, userAgent: ctx.userAgent },
     );
 
+    // Above threshold: insert a pending record and return without applying stock changes
     if (governanceRequest) {
-      throw new BadRequestException({
-        message: 'Adjustment requires governance approval before execution',
-        approvalRequestId: governanceRequest.id,
-        approvalStatus: governanceRequest.status,
-      });
-    }
-
-    const [inserted] = await this.db.transaction(async (tx) => {
-      const [adj] = await tx
+      const [pending] = await this.db
         .insert(adjustments)
         .values({
           companyId: station.companyId,
@@ -163,6 +185,8 @@ export class AdjustmentsService {
           volumeDelta: volumeDeltaStr,
           reason: dto.reason.trim(),
           notes: dto.notes?.trim() || null,
+          status: 'pending_approval',
+          approvalRequestId: governanceRequest.id,
           createdBy: ctx.userId,
           updatedBy: ctx.userId,
         })
@@ -175,9 +199,55 @@ export class AdjustmentsService {
           volumeDelta: adjustments.volumeDelta,
           reason: adjustments.reason,
           notes: adjustments.notes,
+          status: adjustments.status,
+          approvalRequestId: adjustments.approvalRequestId,
           createdAt: adjustments.createdAt,
         });
-      if (!adj) throw new Error('Failed to insert adjustment');
+      if (!pending) throw new InternalServerErrorException('Failed to insert pending adjustment');
+
+      await this.audit.log({
+        entity: 'adjustments',
+        entityId: pending.id,
+        action: 'create_pending',
+        after: { ...pending, approvalRequestId: governanceRequest.id } as object,
+        userId: ctx.userId,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return pending;
+    }
+
+    // Below threshold (or governance disabled): execute immediately
+    const [inserted] = await this.db.transaction(async (tx) => {
+      const [adj] = await tx
+        .insert(adjustments)
+        .values({
+          companyId: station.companyId,
+          branchId: dto.branchId,
+          tankId: dto.tankId,
+          adjustmentDate,
+          volumeDelta: volumeDeltaStr,
+          reason: dto.reason.trim(),
+          notes: dto.notes?.trim() || null,
+          status: 'completed',
+          createdBy: ctx.userId,
+          updatedBy: ctx.userId,
+        })
+        .returning({
+          id: adjustments.id,
+          companyId: adjustments.companyId,
+          branchId: adjustments.branchId,
+          tankId: adjustments.tankId,
+          adjustmentDate: adjustments.adjustmentDate,
+          volumeDelta: adjustments.volumeDelta,
+          reason: adjustments.reason,
+          notes: adjustments.notes,
+          status: adjustments.status,
+          approvalRequestId: adjustments.approvalRequestId,
+          createdAt: adjustments.createdAt,
+        });
+      if (!adj) throw new InternalServerErrorException('Failed to insert adjustment');
 
       await tx
         .update(tanks)
@@ -217,7 +287,7 @@ export class AdjustmentsService {
       return [adj];
     });
 
-    if (!inserted) throw new Error('Adjustment insert failed');
+    if (!inserted) throw new InternalServerErrorException('Adjustment insert failed');
     return inserted;
   }
 }

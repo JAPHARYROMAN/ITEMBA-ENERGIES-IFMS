@@ -4,6 +4,8 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { DRIZZLE } from '../../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { ShiftsService } from './shifts.service';
+import { GovernanceService } from '../governance/governance.service';
+import { NotificationTriggersService } from '../notifications/notification-triggers.service';
 
 describe('ShiftsService', () => {
   let service: ShiftsService;
@@ -51,6 +53,8 @@ describe('ShiftsService', () => {
         { provide: DRIZZLE, useValue: db },
         { provide: AuditService, useValue: audit },
         { provide: ConfigService, useValue: config },
+        { provide: GovernanceService, useValue: { initiateControlledActionRequest: jest.fn() } },
+        { provide: NotificationTriggersService, useValue: { triggerGenericNotification: jest.fn() } },
       ],
     }).compile();
 
@@ -187,14 +191,23 @@ describe('ShiftsService', () => {
         approvedBy: null,
         createdAt: new Date(),
       };
-      db.select.mockReturnValue({
-        from: jest.fn().mockReturnValue({
-          where: jest.fn().mockResolvedValue([shift]),
-        }),
-      });
+      db.select
+        .mockReturnValueOnce({
+          from: jest.fn().mockReturnValue({
+            where: jest.fn().mockResolvedValue([shift]),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: jest.fn().mockReturnValue({
+            where: jest.fn().mockResolvedValue([]),
+          }),
+        });
 
       const result = await service.findById('shift-1');
-      expect(result).toEqual(shift);
+      expect(result).toEqual({
+        ...shift,
+        openingMeterReadings: [],
+      });
     });
 
     it('should throw NotFoundException when shift not found', async () => {

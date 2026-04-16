@@ -9,8 +9,8 @@ import StatCard from '../ifms/StatCard';
 import { IFMSDataTable } from '../ifms/DataTable';
 import DetailsDrawer from '../ifms/DetailsDrawer';
 import { useAppStore } from '../../store';
-import { downloadCSV } from '../../lib/exportUtils';
 import { useReportsStore } from '../../store';
+import { ExportButton } from '../ifms/ExportButton';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   Cell, ComposedChart, Line
@@ -28,9 +28,11 @@ import {
   PackageCheck
 } from 'lucide-react';
 import { DashboardSkeleton, TableSkeleton } from '../ifms/Skeletons';
+import { useCurrency } from '../../lib/hooks/useCurrency';
 
 const ProfitabilityReport: React.FC = () => {
   const { addToast } = useAppStore();
+  const { fmt, fmtCompact, header, symbol } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
   const [drilldown, setDrilldown] = useState<any>(null);
   const reportActionMutation = useMutation({
@@ -58,7 +60,7 @@ const ProfitabilityReport: React.FC = () => {
     { label: 'Margin Growth', text: 'Avg. Gross Margin per Liter improved 1.2% WoW due to supply optimization.', type: 'positive' },
     { label: 'Expense Risk', text: 'Utility expenses at Downtown Station are 15% above benchmark allocated budget.', type: 'warning' },
     { label: 'Product Mix', text: 'V-Power Racing contribution grew by 8% despite lower overall volume.', type: 'positive' },
-    { label: 'Revenue Opportunity', text: 'Recent $0.10 price adjustment at Highway Station projects $5,000 monthly margin upside.', type: 'info' }
+    { label: 'Revenue Opportunity', text: `Recent ${symbol}0.10 price adjustment at Highway Station projects ${fmtCompact(5000)} monthly margin upside.`, type: 'info' }
   ];
 
   return (
@@ -67,9 +69,7 @@ const ProfitabilityReport: React.FC = () => {
         title="Executive Profitability Analysis" 
         description="Bottom-line tracking, cost-to-serve modeling, and margin optimization intelligence."
         actions={
-          <button type="button" onClick={() => { const k = kpis; if (k) downloadCSV('profitability-exec-deck.csv', ['Metric', 'Value', 'Change'], [['Gross Profit', k.grossProfit?.value, k.grossProfit?.change], ['Net Contribution', k.netProfit?.value, k.netProfit?.change], ['Margin per Liter', k.marginPerLiter?.value, k.marginPerLiter?.change], ['OpEx Ratio', `${k.opexRatio?.value}%`, k.opexRatio?.change]]); addToast('Executive deck exported', 'success'); }} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-bold shadow-lg shadow-primary/20 hover:opacity-90">
-            Export Executive Deck
-          </button>
+          <ExportButton exportType="reports.profitability" params={filters} label="Export" />
         }
       />
 
@@ -77,9 +77,9 @@ const ProfitabilityReport: React.FC = () => {
 
       {/* Primary KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard label="Gross Profit" value={`$${kpis?.grossProfit.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} delta={kpis?.grossProfit.change} trend={kpis?.grossProfit.trend as any} />
-        <StatCard label="Net Contribution" value={`$${kpis?.netProfit.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} delta={kpis?.netProfit.change} trend={kpis?.netProfit.trend as any} />
-        <StatCard label="Margin per Liter" value={`$${kpis?.marginPerLiter.value.toFixed(2)}`} delta={kpis?.marginPerLiter.change} trend={kpis?.marginPerLiter.trend as any} />
+        <StatCard label="Gross Profit" value={fmtCompact(kpis?.grossProfit.value ?? 0)} delta={kpis?.grossProfit.change} trend={kpis?.grossProfit.trend as any} />
+        <StatCard label="Net Contribution" value={fmtCompact(kpis?.netProfit.value ?? 0)} delta={kpis?.netProfit.change} trend={kpis?.netProfit.trend as any} />
+        <StatCard label="Margin per Liter" value={fmt(kpis?.marginPerLiter.value ?? 0)} delta={kpis?.marginPerLiter.change} trend={kpis?.marginPerLiter.trend as any} />
         <StatCard label="OpEx Ratio" value={`${kpis?.opexRatio.value.toFixed(1)}%`} delta={kpis?.opexRatio.change} trend={kpis?.opexRatio.trend as any} />
       </div>
 
@@ -122,11 +122,11 @@ const ProfitabilityReport: React.FC = () => {
                 <div className="p-4 bg-muted/20 rounded-xl border border-border space-y-3">
                    <div className="flex justify-between items-center">
                       <span className="text-[10px] uppercase font-bold text-muted-foreground">Rev. Impact</span>
-                      <span className="text-sm font-black text-emerald-600">+$5,000</span>
+                      <span className="text-sm font-black text-emerald-600">+{fmtCompact(5000)}</span>
                    </div>
                    <div className="flex justify-between items-center">
                       <span className="text-[10px] uppercase font-bold text-muted-foreground">Margin Delta</span>
-                      <span className="text-sm font-black text-emerald-600">+$5,000</span>
+                      <span className="text-sm font-black text-emerald-600">+{fmtCompact(5000)}</span>
                    </div>
                    <div className="pt-2 border-t border-border/50 flex items-center gap-2">
                       <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
@@ -191,12 +191,12 @@ const ProfitabilityReport: React.FC = () => {
              onRowClick={(row) => setDrilldown({ ...row, type: 'Station Details' })}
              columns={[
                { header: 'Station', accessorKey: 'name' },
-               { header: 'Revenue ($)', accessorKey: 'revenue', cell: (s: any) => s.revenue.toLocaleString() },
-               { header: 'Gross Margin ($)', accessorKey: 'grossMargin', cell: (s: any) => s.grossMargin.toLocaleString() },
-               { header: 'Alloc. OpEx ($)', accessorKey: 'allocatedOpEx', cell: (s: any) => s.allocatedOpEx.toLocaleString(undefined, { maximumFractionDigits: 0 }) },
-               { header: 'Net Contribution ($)', accessorKey: 'contribution', cell: (s: any) => (
+               { header: header('Revenue'), accessorKey: 'revenue', cell: (s: any) => fmtCompact(s.revenue) },
+               { header: header('Gross Margin'), accessorKey: 'grossMargin', cell: (s: any) => fmtCompact(s.grossMargin) },
+               { header: header('Alloc. OpEx'), accessorKey: 'allocatedOpEx', cell: (s: any) => fmtCompact(s.allocatedOpEx) },
+               { header: header('Net Contribution'), accessorKey: 'contribution', cell: (s: any) => (
                  <span className={`font-black ${s.contribution < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                   ${s.contribution.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                   {fmtCompact(s.contribution)}
                  </span>
                )},
                { header: 'Margin %', accessorKey: 'marginPct', cell: (s: any) => (
@@ -223,7 +223,7 @@ const ProfitabilityReport: React.FC = () => {
            <div className="bg-primary/5 border border-primary/20 p-6 rounded-2xl flex items-center justify-between">
               <div>
                  <p className="text-[10px] font-black uppercase text-primary/60 mb-1 tracking-widest">Net Contribution</p>
-                 <p className="text-3xl font-black text-primary">${drilldown?.contribution.toLocaleString()}</p>
+                 <p className="text-3xl font-black text-primary">{fmtCompact(drilldown?.contribution ?? 0)}</p>
               </div>
               <div className="p-3 bg-white rounded-xl shadow-sm">
                  <ArrowUpRight size={24} className="text-primary" />
@@ -238,28 +238,28 @@ const ProfitabilityReport: React.FC = () => {
                        <DollarSign size={14} className="text-muted-foreground/50" />
                        Total Sales Revenue
                     </span>
-                    <span className="font-bold">${drilldown?.revenue.toLocaleString()}</span>
+                    <span className="font-bold">{fmtCompact(drilldown?.revenue ?? 0)}</span>
                  </div>
                  <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground flex items-center gap-2">
                        <PackageCheck size={14} className="text-muted-foreground/50" />
                        COGS (Estimated)
                     </span>
-                    <span className="font-bold">-${(drilldown?.revenue - drilldown?.grossMargin).toLocaleString()}</span>
+                    <span className="font-bold">-{fmtCompact((drilldown?.revenue ?? 0) - (drilldown?.grossMargin ?? 0))}</span>
                  </div>
                  <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground flex items-center gap-2">
                        <TrendingUp size={14} className="text-muted-foreground/50" />
                        Gross Margin
                     </span>
-                    <span className="font-bold">${drilldown?.grossMargin.toLocaleString()}</span>
+                    <span className="font-bold">{fmtCompact(drilldown?.grossMargin ?? 0)}</span>
                  </div>
                  <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground flex items-center gap-2 text-rose-500/80">
                        <FileText size={14} />
                        Allocated Operating Expenses
                     </span>
-                    <span className="font-bold text-rose-600">-${drilldown?.allocatedOpEx.toLocaleString()}</span>
+                    <span className="font-bold text-rose-600">-{fmtCompact(drilldown?.allocatedOpEx ?? 0)}</span>
                  </div>
               </div>
            </div>

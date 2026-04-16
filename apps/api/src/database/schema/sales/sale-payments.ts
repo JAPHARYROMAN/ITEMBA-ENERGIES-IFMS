@@ -1,4 +1,5 @@
-import { index, numeric, pgTable, uuid, varchar } from 'drizzle-orm/pg-core';
+import { check, index, numeric, pgTable, uuid, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { auditColumns } from '../shared';
 import { salesTransactions } from './sales-transactions';
 
@@ -14,5 +15,6 @@ export const salePayments = pgTable(
   },
   (t) => [
     index('sale_payments_sale_transaction_id_idx').on(t.saleTransactionId),
+    check('sale_payments_amount_positive', sql`${t.amount} > 0`),
   ],
 );

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min, ValidateNested } from 'class-validator';
 
 export class ClosingMeterReadingDto {
   @ApiProperty()
@@ -15,8 +15,9 @@ export class ClosingMeterReadingDto {
 }
 
 export class ShiftCollectionDto {
-  @ApiProperty({ example: 'Cash', description: 'Payment method' })
+  @ApiProperty({ example: 'Cash', description: 'Payment method', enum: ['Cash', 'Card', 'MobileMoney', 'Credit', 'Cheque', 'BankTransfer'] })
   @IsString()
+  @IsIn(['Cash', 'Card', 'MobileMoney', 'Credit', 'Cheque', 'BankTransfer'], { message: 'paymentMethod must be one of: Cash, Card, MobileMoney, Credit, Cheque, BankTransfer' })
   @MaxLength(32)
   paymentMethod!: string;
 

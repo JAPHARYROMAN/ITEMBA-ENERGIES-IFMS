@@ -43,13 +43,15 @@ describe('Shifts Open/Close Transaction (e2e)', () => {
   });
 
   it('opens then closes a shift via API', async () => {
+    const shiftId = '22222222-2222-2222-2222-222222222222';
+
     shiftsServiceMock.open.mockResolvedValueOnce({
-      id: 'shift-1',
+      id: shiftId,
       status: 'open',
       startTime: new Date().toISOString(),
     });
     shiftsServiceMock.close.mockResolvedValueOnce({
-      id: 'shift-1',
+      id: shiftId,
       status: 'closed',
       startTime: new Date().toISOString(),
       endTime: new Date().toISOString(),
@@ -67,7 +69,7 @@ describe('Shifts Open/Close Transaction (e2e)', () => {
     expect(openRes.body.status).toBe('open');
 
     const closeRes = await request(app.getHttpServer())
-      .post('/shifts/shift-1/close')
+      .post(`/shifts/${shiftId}/close`)
       .set('Authorization', 'Bearer token')
       .send({
         closingMeterReadings: [],

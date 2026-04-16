@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
@@ -25,6 +26,7 @@ import { GovernanceService } from '../governance/governance.service';
 import type { CreateExpenseCategoryDto } from './dto/create-expense-category.dto';
 import type { UpdateExpenseCategoryDto } from './dto/update-expense-category.dto';
 import type { CreateExpenseEntryDto } from './dto/create-expense-entry.dto';
+import type { UpdateExpenseEntryDto } from './dto/update-expense-entry.dto';
 import type { CreatePettyCashTxDto } from './dto/create-petty-cash-tx.dto';
 
 type Schema = typeof schema;
@@ -199,7 +201,7 @@ export class ExpensesService {
           status: expenseCategories.status,
           createdAt: expenseCategories.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Failed to insert expense category');
       await this.audit.log({
         entity: 'expense_categories',
         entityId: inserted.id,
@@ -323,7 +325,7 @@ export class ExpensesService {
         status: expenseEntries.status,
         createdAt: expenseEntries.createdAt,
       });
-    if (!inserted) throw new Error('Failed to insert expense entry');
+    if (!inserted) throw new InternalServerErrorException('Failed to insert expense entry');
     await this.audit.log({
       entity: 'expense_entries',
       entityId: inserted.id,
@@ -334,6 +336,72 @@ export class ExpensesService {
       userAgent: ctx.userAgent,
     });
     return inserted;
+  }
+
+  async updateExpenseEntry(id: string, dto: UpdateExpenseEntryDto, ctx: AuditContext): Promise<ExpenseEntryItem> {
+    const [before] = await this.db
+      .select()
+      .from(expenseEntries)
+      .where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
+    if (!before) throw new NotFoundException('Expense entry not found');
+
+    if (before.status !== EXPENSE_STATUS_DRAFT && before.status !== EXPENSE_STATUS_REJECTED) {
+      throw new BadRequestException('Only draft or rejected expense entries can be edited');
+    }
+
+    const set: Record<string, unknown> = {
+      updatedAt: new Date(),
+      updatedBy: ctx.userId,
+      rejectionReason: null,
+      status: EXPENSE_STATUS_DRAFT,
+    };
+
+    if (dto.companyId !== undefined) set.companyId = dto.companyId;
+    if (dto.branchId !== undefined) set.branchId = dto.branchId;
+    if (dto.categoryId !== undefined) set.categoryId = dto.categoryId;
+    if (dto.category !== undefined) set.category = dto.category.trim();
+    if (dto.amount !== undefined) set.amount = String(dto.amount.toFixed(2));
+    if (dto.vendor !== undefined) set.vendor = dto.vendor.trim();
+    if (dto.paymentMethod !== undefined) set.paymentMethod = dto.paymentMethod;
+    if (dto.description !== undefined) set.description = dto.description?.trim() || null;
+    if (dto.billableDepartment !== undefined) set.billableDepartment = dto.billableDepartment?.trim() || null;
+    if (dto.attachmentName !== undefined) set.attachmentName = dto.attachmentName?.trim() || null;
+
+    const [updated] = await this.db
+      .update(expenseEntries)
+      .set(set as typeof expenseEntries.$inferInsert)
+      .where(eq(expenseEntries.id, id))
+      .returning({
+        id: expenseEntries.id,
+        companyId: expenseEntries.companyId,
+        branchId: expenseEntries.branchId,
+        entryNumber: expenseEntries.entryNumber,
+        categoryId: expenseEntries.categoryId,
+        category: expenseEntries.category,
+        amount: expenseEntries.amount,
+        vendor: expenseEntries.vendor,
+        paymentMethod: expenseEntries.paymentMethod,
+        description: expenseEntries.description,
+        billableDepartment: expenseEntries.billableDepartment,
+        attachmentName: expenseEntries.attachmentName,
+        rejectionReason: expenseEntries.rejectionReason,
+        status: expenseEntries.status,
+        createdAt: expenseEntries.createdAt,
+      });
+    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
+
+    await this.audit.log({
+      entity: 'expense_entries',
+      entityId: id,
+      action: 'update',
+      before: before as object,
+      after: updated as object,
+      userId: ctx.userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+
+    return updated;
   }
 
   async listExpenseEntries(params: {
@@ -393,6 +461,52 @@ export class ExpensesService {
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
+  async getExpenseEntry(id: string): Promise<ExpenseEntryItem> {
+    const [row] = await this.db
+      .select({
+        id: expenseEntries.id,
+        companyId: expenseEntries.companyId,
+        branchId: expenseEntries.branchId,
+        entryNumber: expenseEntries.entryNumber,
+        categoryId: expenseEntries.categoryId,
+        category: expenseEntries.category,
+        amount: expenseEntries.amount,
+        vendor: expenseEntries.vendor,
+        paymentMethod: expenseEntries.paymentMethod,
+        description: expenseEntries.description,
+        billableDepartment: expenseEntries.billableDepartment,
+        attachmentName: expenseEntries.attachmentName,
+        rejectionReason: expenseEntries.rejectionReason,
+        status: expenseEntries.status,
+        createdAt: expenseEntries.createdAt,
+      })
+      .from(expenseEntries)
+      .where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
+    if (!row) throw new NotFoundException('Expense entry not found');
+    return row;
+  }
+
+  async deleteExpenseEntry(id: string, ctx: AuditContext): Promise<void> {
+    const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
+    if (!before) throw new NotFoundException('Expense entry not found');
+    if (before.status !== EXPENSE_STATUS_DRAFT && before.status !== EXPENSE_STATUS_REJECTED) {
+      throw new BadRequestException('Only draft or rejected entries can be deleted');
+    }
+    await this.db
+      .update(expenseEntries)
+      .set({ deletedAt: new Date(), updatedAt: new Date(), updatedBy: ctx.userId })
+      .where(eq(expenseEntries.id, id));
+    await this.audit.log({
+      entity: 'expense_entries',
+      entityId: id,
+      action: 'delete',
+      before: before as object,
+      userId: ctx.userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+  }
+
   async submitExpenseEntry(id: string, ctx: AuditContext): Promise<ExpenseEntryItem> {
     const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
     if (!before) throw new NotFoundException('Expense entry not found');
@@ -446,7 +560,7 @@ export class ExpensesService {
           status: expenseEntries.status,
           createdAt: expenseEntries.createdAt,
         });
-      if (!pending) throw new Error('Failed to set expense pending approval');
+      if (!pending) throw new InternalServerErrorException('Failed to set expense pending approval');
 
       await this.audit.log({
         entity: 'expense_entries',
@@ -488,7 +602,7 @@ export class ExpensesService {
         status: expenseEntries.status,
         createdAt: expenseEntries.createdAt,
       });
-    if (!updated) throw new Error('Failed to update expense entry');
+    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
     await this.audit.log({
       entity: 'expense_entries',
       entityId: id,
@@ -506,9 +620,18 @@ export class ExpensesService {
     await this.assertManager(ctx.userId);
     const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
     if (!before) throw new NotFoundException('Expense entry not found');
-    if (before.status !== EXPENSE_STATUS_SUBMITTED) {
-      throw new BadRequestException(`Only ${EXPENSE_STATUS_SUBMITTED} entries can be approved`);
+
+    const approvableStatuses = [EXPENSE_STATUS_SUBMITTED, EXPENSE_STATUS_PENDING_APPROVAL];
+    if (!approvableStatuses.includes(before.status)) {
+      throw new BadRequestException(
+        `Only ${EXPENSE_STATUS_SUBMITTED} or ${EXPENSE_STATUS_PENDING_APPROVAL} entries can be approved (current: ${before.status})`,
+      );
     }
+
+    if (before.createdBy === ctx.userId) {
+      throw new ForbiddenException('Cannot approve your own expense entry');
+    }
+
     const [updated] = await this.db
       .update(expenseEntries)
       .set({
@@ -535,7 +658,7 @@ export class ExpensesService {
         status: expenseEntries.status,
         createdAt: expenseEntries.createdAt,
       });
-    if (!updated) throw new Error('Failed to update expense entry');
+    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
     await this.audit.log({
       entity: 'expense_entries',
       entityId: id,
@@ -556,9 +679,14 @@ export class ExpensesService {
 
     const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
     if (!before) throw new NotFoundException('Expense entry not found');
-    if (before.status !== EXPENSE_STATUS_SUBMITTED) {
-      throw new BadRequestException(`Only ${EXPENSE_STATUS_SUBMITTED} entries can be rejected`);
+
+    const rejectableStatuses = [EXPENSE_STATUS_SUBMITTED, EXPENSE_STATUS_PENDING_APPROVAL];
+    if (!rejectableStatuses.includes(before.status)) {
+      throw new BadRequestException(
+        `Only ${EXPENSE_STATUS_SUBMITTED} or ${EXPENSE_STATUS_PENDING_APPROVAL} entries can be rejected (current: ${before.status})`,
+      );
     }
+
     const [updated] = await this.db
       .update(expenseEntries)
       .set({
@@ -585,7 +713,7 @@ export class ExpensesService {
         status: expenseEntries.status,
         createdAt: expenseEntries.createdAt,
       });
-    if (!updated) throw new Error('Failed to update expense entry');
+    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
     await this.audit.log({
       entity: 'expense_entries',
       entityId: id,
@@ -689,7 +817,7 @@ export class ExpensesService {
           balanceAfter: pettyCashLedger.balanceAfter,
           createdAt: pettyCashLedger.createdAt,
         });
-      if (!inserted) throw new Error('Failed to insert petty cash ledger entry');
+      if (!inserted) throw new InternalServerErrorException('Failed to insert petty cash ledger entry');
 
       await this.audit.log(
         {

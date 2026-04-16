@@ -218,11 +218,3 @@ npm run dev
 ## License
 
 Proprietary – ITEMBA-ENERGIES
-
----
-
-If you want, I can now provide:
-
-* A **short marketing-style README for public GitHub**
-* A **strict internal technical README**
-* Or a **full developer onboarding guide** (with commands, scripts, flow diagrams)

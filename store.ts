@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { AppState, AuthState, User } from './types';
+import { AppState, AuthState, PermissionMatch, User } from './types';
 import { setTokens, clearTokens, getRefreshToken, getAccessToken } from './lib/api/auth-token';
 import * as apiAuth from './lib/api/auth';
 
@@ -13,9 +13,16 @@ interface Toast {
 
 interface UIState {
   isSearchOpen: boolean;
+  isAiPanelOpen: boolean;
   toasts: Toast[];
   setSearchOpen: (open: boolean) => void;
-  addToast: (message: string, type?: Toast['type'], action?: { label: string; href: string }) => void;
+  setAiPanelOpen: (open: boolean) => void;
+  toggleAiPanel: () => void;
+  addToast: (
+    message: string,
+    type?: Toast['type'],
+    action?: { label: string; href: string },
+  ) => void;
   removeToast: (id: string) => void;
 }
 
@@ -30,6 +37,7 @@ export const useAppStore = create<AppState & UIState>((set) => ({
   sidebarCollapsed: localStorage.getItem('sidebar-collapsed') === 'true',
   theme: (localStorage.getItem('theme') as 'light' | 'dark') || 'light',
   isSearchOpen: false,
+  isAiPanelOpen: false,
   toasts: [],
 
   toggleSidebar: () =>
@@ -51,6 +59,10 @@ export const useAppStore = create<AppState & UIState>((set) => ({
     }),
 
   setSearchOpen: (open) => set({ isSearchOpen: open }),
+
+  setAiPanelOpen: (open) => set({ isAiPanelOpen: open }),
+
+  toggleAiPanel: () => set((state) => ({ isAiPanelOpen: !state.isAiPanelOpen })),
 
   addToast: (message, type = 'info', action) => {
     const id = Math.random().toString(36).substr(2, 9);
@@ -74,48 +86,107 @@ export const useAppStore = create<AppState & UIState>((set) => ({
   removeToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 }));
 
+function getCurrentMonthRange() {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+  return { from, to };
+}
+
 export const useReportsStore = create<ReportsFilterState>((set) => ({
-  dateRange: { from: '2024-10-01', to: '2024-10-31' },
+  dateRange: getCurrentMonthRange(),
   stationId: null,
   productId: null,
   setFilters: (filters) => set((state) => ({ ...state, ...filters })),
 }));
 
+type PermissionAwareUser = Pick<User, 'permissions'> | null | undefined;
+
+export function hasPermission(user: PermissionAwareUser, permission: string): boolean {
+  return Boolean(user?.permissions?.includes(permission));
+}
+
+export function hasAnyPermission(
+  user: PermissionAwareUser,
+  permissions: string[] | undefined,
+): boolean {
+  if (!permissions?.length) return true;
+  return permissions.some((permission) => hasPermission(user, permission));
+}
+
+export function hasAllPermissions(
+  user: PermissionAwareUser,
+  permissions: string[] | undefined,
+): boolean {
+  if (!permissions?.length) return true;
+  return permissions.every((permission) => hasPermission(user, permission));
+}
+
+export function matchesPermissionRequirement(
+  user: PermissionAwareUser,
+  permissions: string[] | undefined,
+  match: PermissionMatch = 'any',
+): boolean {
+  return match === 'all'
+    ? hasAllPermissions(user, permissions)
+    : hasAnyPermission(user, permissions);
+}
+
 function meToUser(me: { id: string; email: string; name: string; permissions?: string[] }): User {
-  const perms = me.permissions ?? [];
-  const isManager = perms.includes('setup:write') || perms.includes('admin:write');
-  const isAuditor = perms.includes('expenses:read') && !perms.includes('expenses:write');
+  const permissions = [...new Set(me.permissions ?? [])];
+  const permUser = { permissions };
+  const isManager = hasAnyPermission(permUser, ['setup:write', 'sales:void', 'reports:refresh']);
+  const isAuditor =
+    hasPermission(permUser, 'audit:read') ||
+    (hasPermission(permUser, 'expenses:read') && !hasPermission(permUser, 'expenses:write'));
   const role: User['role'] = isManager ? 'manager' : isAuditor ? 'auditor' : 'cashier';
-  return { id: me.id, name: me.name, email: me.email, role };
+  return { id: me.id, name: me.name, email: me.email, role, permissions };
 }
 
 function getInitialAuth() {
-  const stored = localStorage.getItem('auth-user');
-  if (!stored) return { user: null as User | null, isAuthenticated: false };
-  if (!getAccessToken()) return { user: null, isAuthenticated: false };
-  return { user: JSON.parse(stored) as User, isAuthenticated: true };
+  const hasAccessToken = Boolean(getAccessToken());
+  return {
+    user: null as User | null,
+    isAuthenticated: false,
+    isAuthReady: !hasAccessToken,
+  };
 }
 
 export const useAuthStore = create<AuthState>((set, get) => {
   const initial = getInitialAuth();
   return {
-  user: initial.user,
-  isAuthenticated: initial.isAuthenticated,
-  loginWithCredentials: async (email: string, password: string) => {
-    const tokens = await apiAuth.login(email, password);
-    setTokens(tokens.accessToken, tokens.refreshToken);
-    const me = await apiAuth.getMe();
-    const user = meToUser(me);
-    localStorage.setItem('auth-user', JSON.stringify(user));
-    set({ user, isAuthenticated: true });
-  },
-  logout: () => {
-    const refresh = getRefreshToken();
-    if (refresh) {
-      apiAuth.logout(refresh).catch(() => {});
-    }
-    clearTokens();
-    localStorage.removeItem('auth-user');
-    set({ user: null, isAuthenticated: false });
-  },
-};});
+    user: initial.user,
+    isAuthenticated: initial.isAuthenticated,
+    isAuthReady: initial.isAuthReady,
+    hydrateAuth: async () => {
+      if (get().isAuthReady) return;
+      if (!getAccessToken()) {
+        set({ user: null, isAuthenticated: false, isAuthReady: true });
+        return;
+      }
+      try {
+        const me = await apiAuth.getMe();
+        const user = meToUser(me);
+        set({ user, isAuthenticated: true, isAuthReady: true });
+      } catch {
+        clearTokens();
+        set({ user: null, isAuthenticated: false, isAuthReady: true });
+      }
+    },
+    loginWithCredentials: async (email: string, password: string) => {
+      const tokens = await apiAuth.login(email, password);
+      setTokens(tokens.accessToken, tokens.refreshToken);
+      const me = await apiAuth.getMe();
+      const user = meToUser(me);
+      set({ user, isAuthenticated: true, isAuthReady: true });
+    },
+    logout: () => {
+      const refresh = getRefreshToken();
+      if (refresh) {
+        apiAuth.logout(refresh).catch(() => {});
+      }
+      clearTokens();
+      set({ user: null, isAuthenticated: false, isAuthReady: true });
+    },
+  };
+});

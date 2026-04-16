@@ -1,6 +1,7 @@
 import { apiFetch } from './api/client';
 import { apiSetup } from './api/setup';
 import { apiGovernance } from './api/governance';
+import { useReportsStore } from '../store';
 import {
   Delivery,
   Supplier,
@@ -36,6 +37,19 @@ interface DefaultContext {
   branchId: string;
 }
 
+interface ShiftDetailResponse {
+  id: string;
+  stationId: string;
+  startTime: string;
+  endTime: string | null;
+  openedBy: string | null;
+  openingMeterReadings: Array<{
+    nozzleId: string;
+    value: number | string;
+    pricePerUnit: number | string;
+  }>;
+}
+
 const uiToApiPaymentMethod: Record<string, string> = {
   'Petty Cash': 'petty_cash',
   'Bank Transfer': 'bank',
@@ -51,18 +65,39 @@ const uiToApiCustomerStatus: Record<string, string> = {
 };
 
 let cachedDefaultContext: DefaultContext | null = null;
+let cachedDefaultStationId: string | null = null;
+const MAX_LIST_PAGE_SIZE = 100;
 
 async function listAll<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T[]> {
-  const search = new URLSearchParams();
-  search.set('page', '1');
-  search.set('pageSize', '500');
-  if (params) {
-    Object.entries(params).forEach(([k, v]) => {
-      if (v !== undefined && v !== '') search.set(k, String(v));
-    });
+  const requestedPageSize = Number(params?.pageSize ?? MAX_LIST_PAGE_SIZE);
+  const safePageSize = Number.isFinite(requestedPageSize) && requestedPageSize > 0
+    ? Math.min(MAX_LIST_PAGE_SIZE, Math.trunc(requestedPageSize))
+    : MAX_LIST_PAGE_SIZE;
+  const rows: T[] = [];
+  let page = 1;
+
+  while (true) {
+    const search = new URLSearchParams();
+    search.set('page', String(page));
+    search.set('pageSize', String(safePageSize));
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (k === 'page' || k === 'pageSize') return;
+        if (v !== undefined && v !== '') search.set(k, String(v));
+      });
+    }
+
+    const res = await apiFetch<ListResponse<T>>(`${path}?${search.toString()}`);
+    const pageRows = res.data ?? [];
+    rows.push(...pageRows);
+
+    const total = res.meta?.total ?? pageRows.length;
+    if (pageRows.length === 0 || rows.length >= total || pageRows.length < safePageSize) {
+      return rows;
+    }
+
+    page += 1;
   }
-  const res = await apiFetch<ListResponse<T>>(`${path}?${search.toString()}`);
-  return res.data ?? [];
 }
 
 function toUiCustomerStatus(status: string): Customer['status'] {
@@ -93,17 +128,26 @@ function toUiNozzleStatus(status: string): Nozzle['status'] {
 }
 
 async function getDefaultContext(): Promise<DefaultContext> {
-  if (cachedDefaultContext) return cachedDefaultContext;
+  const selectedStationId = useReportsStore.getState().stationId ?? null;
+  if (cachedDefaultContext && cachedDefaultStationId === selectedStationId) {
+    return cachedDefaultContext;
+  }
 
   const [stations, branches] = await Promise.all([
     apiSetup.stations.list(),
     apiSetup.branches.list(),
   ]);
 
-  const branch = branches[0];
+  const preferredStation = selectedStationId
+    ? stations.find((station) => station.id === selectedStationId)
+    : stations[0];
+  const preferredBranch = preferredStation
+    ? branches.find((branch) => branch.stationId === preferredStation.id)
+    : undefined;
+  const branch = preferredBranch ?? branches[0];
   if (!branch) throw new Error('No branches found. Create a branch in setup first.');
 
-  const station = stations.find((s) => s.id === branch.stationId);
+  const station = preferredStation ?? stations.find((s) => s.id === branch.stationId);
   if (!station) throw new Error('No station found for selected branch.');
 
   cachedDefaultContext = {
@@ -111,6 +155,7 @@ async function getDefaultContext(): Promise<DefaultContext> {
     stationId: station.id,
     branchId: branch.id,
   };
+  cachedDefaultStationId = selectedStationId;
   return cachedDefaultContext;
 }
 
@@ -324,10 +369,10 @@ export const customerRepo = {
         branchId,
         code: data.code ?? `CUST-${Date.now().toString().slice(-6)}`,
         name: data.name,
-        email: data.email,
-        phone: data.phone,
-        address: data.address,
-        taxId: data.taxId,
+        ...(data.email ? { email: data.email } : {}),
+        ...(data.phone ? { phone: data.phone } : {}),
+        ...(data.address ? { address: data.address } : {}),
+        ...(data.taxId ? { taxId: data.taxId } : {}),
         creditLimit: Number(data.creditLimit),
         paymentTerms: data.paymentTerms ?? 'net30',
         status:
@@ -366,7 +411,8 @@ export const invoiceRepo = {
       balanceRemaining: string;
     }>('credit-invoices', customerId ? { customerId } : undefined);
     return rows.map((r) => ({
-      id: r.invoiceNumber,
+      id: r.id,
+      invoiceNumber: r.invoiceNumber,
       customerId: r.customerId,
       customerName: '',
       date: new Date(r.invoiceDate).toISOString().slice(0, 10),
@@ -408,7 +454,8 @@ export const invoiceRepo = {
     });
 
     return {
-      id: created.invoiceNumber,
+      id: created.id,
+      invoiceNumber: created.invoiceNumber,
       customerId: created.customerId,
       customerName: '',
       date: new Date(created.invoiceDate).toISOString().slice(0, 10),
@@ -418,7 +465,7 @@ export const invoiceRepo = {
       balanceRemaining: Number(created.balanceRemaining),
       items: created.items.map((i) => ({
         productId: i.productId,
-        productName: i.productId,
+        productName: (i as { productName?: string }).productName ?? i.productId,
         quantity: Number(i.quantity),
         unitPrice: Number(i.unitPrice),
         tax: Number(i.tax ?? 0),
@@ -449,6 +496,13 @@ export const paymentRepo = {
     }));
   },
   create: async (data: any): Promise<CustomerPayment> => {
+    const uiToApiMethod: Record<string, string> = {
+      'Cash': 'cash',
+      'Bank Transfer': 'bank_transfer',
+      'Cheque': 'cheque',
+      'Credit Card': 'card',
+      'Card': 'card',
+    };
     const created = await apiFetch<{
       id: string;
       customerId: string;
@@ -461,7 +515,7 @@ export const paymentRepo = {
       body: {
         customerId: data.customerId,
         amount: Number(data.amount),
-        method: data.method,
+        method: uiToApiMethod[data.method] ?? data.method.toLowerCase().replace(/\s+/g, '_'),
         paymentDate: data.date,
         referenceNo: data.referenceNo,
         allocations: data.allocations,
@@ -631,6 +685,61 @@ export const expenseRepo = {
       governanceApprovalRequestId,
     };
   },
+  update: async (id: string, data: any): Promise<Expense> => {
+    const ctx = await getDefaultContext();
+    const branchId = data.branchId ?? ctx.branchId;
+    const companyId = await resolveCompanyIdFromBranch(branchId);
+
+    const updated = await apiFetch<{
+      id: string;
+      branchId: string;
+      category: string;
+      amount: string;
+      vendor: string;
+      paymentMethod: string;
+      description: string | null;
+      billableDepartment: string | null;
+      attachmentName: string | null;
+      rejectionReason: string | null;
+      status: string;
+      createdAt: string;
+    }>(`expense-entries/${id}`, {
+      method: 'PATCH',
+      body: {
+        companyId,
+        branchId,
+        category: data.category,
+        amount: Number(data.amount),
+        vendor: data.vendor,
+        paymentMethod: uiToApiPaymentMethod[data.paymentMethod] ?? 'other',
+        description: data.description,
+        billableDepartment: data.billableDepartment,
+        attachmentName: data.attachmentName,
+      },
+    });
+
+    return {
+      id: updated.id,
+      timestamp: new Date(updated.createdAt).toISOString(),
+      branchId: updated.branchId,
+      category: updated.category,
+      amount: Number(updated.amount),
+      vendor: updated.vendor,
+      paymentMethod:
+        updated.paymentMethod === 'petty_cash'
+          ? 'Petty Cash'
+          : updated.paymentMethod === 'bank'
+            ? 'Bank Transfer'
+            : updated.paymentMethod === 'card'
+              ? 'Corporate Card'
+              : 'Cash',
+      description: updated.description ?? '',
+      status: toUiExpenseStatus(updated.status),
+      billableDepartment: updated.billableDepartment ?? undefined,
+      rejectionReason: updated.rejectionReason ?? undefined,
+      attachmentName: updated.attachmentName ?? undefined,
+    };
+  },
   updateStatus: async (id: string, status: Expense['status'], reason?: string) => {
     if (status === 'Submitted') {
       await apiFetch(`expense-entries/${id}/submit`, { method: 'POST', body: {} });
@@ -666,7 +775,7 @@ export const pettyCashRepo = {
       balanceAfter: string;
       createdAt: string;
     }> & { balance: number }>(
-      `petty-cash/ledger?page=1&pageSize=500&companyId=${ctx.companyId}&branchId=${ctx.branchId}`,
+      `petty-cash/ledger?page=1&pageSize=100&companyId=${ctx.companyId}&branchId=${ctx.branchId}`,
     );
 
     return (res.data ?? []).map((r) => ({
@@ -894,7 +1003,7 @@ export const shiftRepo = {
       cashierId: created.openedBy ?? '',
       readings: data.readings.map((r) => ({
         nozzleId: r.nozzleId,
-        nozzleCode: r.nozzleId,
+        nozzleCode: r.nozzleCode ?? r.nozzleId,
         openingReading: Number(r.openingReading),
         pricePerUnit: Number(r.pricePerUnit),
       })),
@@ -908,8 +1017,8 @@ export const shiftRepo = {
         collections: [
           { paymentMethod: 'Cash', amount: Number(data.collections.cash || 0) },
           { paymentMethod: 'Card', amount: Number(data.collections.card || 0) },
-          { paymentMethod: 'Mobile Money', amount: Number(data.collections.mobileMoney || 0) },
-          { paymentMethod: 'Voucher', amount: Number(data.collections.voucher || 0) },
+          { paymentMethod: 'MobileMoney', amount: Number(data.collections.mobileMoney || 0) },
+          { paymentMethod: 'Credit', amount: Number(data.collections.voucher || 0) },
         ].filter((c) => c.amount > 0),
         varianceReason: data.varianceReason,
       },
@@ -929,12 +1038,18 @@ export const shiftRepo = {
     const openShift = rows[0];
     if (!openShift) return null;
 
-    const nozzles = await nozzleRepo.list(stationId);
-    const readings = nozzles.map((n) => ({
-      nozzleId: n.id,
-      nozzleCode: `${n.pumpCode}-${n.nozzleCode}`,
-      openingReading: 0,
-      pricePerUnit: 0,
+    const [detail, nozzles] = await Promise.all([
+      apiFetch<ShiftDetailResponse>(`shifts/${openShift.id}`),
+      nozzleRepo.list(stationId ?? openShift.stationId),
+    ]);
+    const nozzleCodeById = new Map(
+      nozzles.map((nozzle) => [nozzle.id, `${nozzle.pumpCode}-${nozzle.nozzleCode}`]),
+    );
+    const readings = detail.openingMeterReadings.map((reading) => ({
+      nozzleId: reading.nozzleId,
+      nozzleCode: nozzleCodeById.get(reading.nozzleId) ?? reading.nozzleId,
+      openingReading: Number(reading.value),
+      pricePerUnit: Number(reading.pricePerUnit),
     }));
 
     return {
@@ -971,11 +1086,15 @@ export const saleRepo = {
   },
   create: async (data: any): Promise<Sale & { payment: { cash: number; card: number; mobile: number; voucher: number } }> => {
     const ctx = await getDefaultContext();
+    if (!data.nozzleId) {
+      throw new Error('Nozzle is required for POS sales');
+    }
+
     const payments = [
       { paymentMethod: 'Cash', amount: Number(data.payment.cash || 0) },
       { paymentMethod: 'Card', amount: Number(data.payment.card || 0) },
-      { paymentMethod: 'Mobile Money', amount: Number(data.payment.mobile || 0) },
-      { paymentMethod: 'Voucher', amount: Number(data.payment.voucher || 0) },
+      { paymentMethod: 'MobileMoney', amount: Number(data.payment.mobile || 0) },
+      { paymentMethod: 'Credit', amount: Number(data.payment.voucher || 0) },
     ].filter((p) => p.amount > 0);
 
     const created = await apiFetch<{
@@ -990,6 +1109,7 @@ export const saleRepo = {
         items: [
           {
             productId: data.productId,
+            nozzleId: data.nozzleId,
             quantity: Number(data.quantity),
             unitPrice: Number(data.pricePerUnit),
           },
@@ -1015,5 +1135,262 @@ export const saleRepo = {
         voucher: Number(data.payment.voucher || 0),
       },
     };
+  },
+};
+
+// --- Inventory repos ---
+
+export const dipRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    tankId: string;
+    dipDate: string;
+    volume: number;
+    waterLevel: number | null;
+    temperature: number | null;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      tankId: string;
+      dipDate: string;
+      volume: string;
+      waterLevel: string | null;
+      temperature: string | null;
+    }>('inventory/dips');
+    return rows.map((r) => ({
+      id: r.id,
+      tankId: r.tankId,
+      dipDate: new Date(r.dipDate).toISOString().slice(0, 10),
+      volume: Number(r.volume),
+      waterLevel: r.waterLevel != null ? Number(r.waterLevel) : null,
+      temperature: r.temperature != null ? Number(r.temperature) : null,
+    }));
+  },
+};
+
+export const reconciliationRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    reconciliationDate: string;
+    expectedVolume: number | null;
+    actualVolume: number | null;
+    variance: number | null;
+    status: string;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      reconciliationDate: string;
+      expectedVolume: string | null;
+      actualVolume: string | null;
+      variance: string | null;
+      status: string;
+    }>('inventory/reconciliations');
+    return rows.map((r) => ({
+      id: r.id,
+      reconciliationDate: new Date(r.reconciliationDate).toISOString().slice(0, 10),
+      expectedVolume: r.expectedVolume != null ? Number(r.expectedVolume) : null,
+      actualVolume: r.actualVolume != null ? Number(r.actualVolume) : null,
+      variance: r.variance != null ? Number(r.variance) : null,
+      status: r.status,
+    }));
+  },
+};
+
+export const varianceRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    tankId: string | null;
+    varianceDate: string;
+    volumeVariance: number;
+    valueVariance: number | null;
+    classification: string | null;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      tankId: string | null;
+      varianceDate: string;
+      volumeVariance: string;
+      valueVariance: string | null;
+      classification: string | null;
+    }>('inventory/variances');
+    return rows.map((r) => ({
+      id: r.id,
+      tankId: r.tankId,
+      varianceDate: new Date(r.varianceDate).toISOString().slice(0, 10),
+      volumeVariance: Number(r.volumeVariance),
+      valueVariance: r.valueVariance != null ? Number(r.valueVariance) : null,
+      classification: r.classification,
+    }));
+  },
+};
+
+// --- Transfers repos ---
+
+export const transferRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    transferType: string;
+    fromTankId: string | null;
+    toTankId: string | null;
+    quantity: number;
+    transferDate: string;
+    status: string;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      transferType: string;
+      fromTankId: string | null;
+      toTankId: string | null;
+      quantity: string;
+      transferDate: string;
+      status: string;
+    }>('transfers');
+    return rows.map((r) => ({
+      id: r.id,
+      transferType: r.transferType,
+      fromTankId: r.fromTankId,
+      toTankId: r.toTankId,
+      quantity: Number(r.quantity),
+      transferDate: new Date(r.transferDate).toISOString().slice(0, 10),
+      status: r.status,
+    }));
+  },
+};
+
+export const adjustmentRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    tankId: string;
+    adjustmentDate: string;
+    volumeDelta: number;
+    reason: string;
+    status: string;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      tankId: string;
+      adjustmentDate: string;
+      volumeDelta: string;
+      reason: string;
+      status: string;
+    }>('adjustments');
+    return rows.map((r) => ({
+      id: r.id,
+      tankId: r.tankId,
+      adjustmentDate: new Date(r.adjustmentDate).toISOString().slice(0, 10),
+      volumeDelta: Number(r.volumeDelta),
+      reason: r.reason,
+      status: r.status,
+    }));
+  },
+};
+
+// --- Payables repos ---
+
+export const supplierInvoiceRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    supplierId: string;
+    invoiceNumber: string;
+    invoiceDate: string;
+    dueDate: string;
+    totalAmount: number;
+    balanceRemaining: number;
+    status: string;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      supplierId: string;
+      invoiceNumber: string;
+      invoiceDate: string;
+      dueDate: string;
+      totalAmount: string;
+      balanceRemaining: string;
+      status: string;
+    }>('supplier-invoices');
+    return rows.map((r) => ({
+      id: r.id,
+      supplierId: r.supplierId,
+      invoiceNumber: r.invoiceNumber,
+      invoiceDate: new Date(r.invoiceDate).toISOString().slice(0, 10),
+      dueDate: new Date(r.dueDate).toISOString().slice(0, 10),
+      totalAmount: Number(r.totalAmount),
+      balanceRemaining: Number(r.balanceRemaining),
+      status: r.status,
+    }));
+  },
+};
+
+export const payablesAgingRepo = {
+  getReport: async (): Promise<{
+    asOf: string;
+    buckets: Array<{ bucket: string; fromDays: number; toDays: number | null; amount: number; count: number }>;
+    total: number;
+  }> => {
+    return apiFetch<{
+      asOf: string;
+      buckets: Array<{ bucket: string; fromDays: number; toDays: number | null; amount: number; count: number }>;
+      total: number;
+    }>('payables/aging');
+  },
+};
+
+export const creditAgingRepo = {
+  getReport: async (): Promise<{
+    asOf: string;
+    buckets: Array<{ bucket: string; fromDays: number; toDays: number | null; amount: number; count: number }>;
+    total: number;
+  }> => {
+    return apiFetch<{
+      asOf: string;
+      buckets: Array<{ bucket: string; fromDays: number; toDays: number | null; amount: number; count: number }>;
+      total: number;
+    }>('credit/aging');
+  },
+};
+
+// --- Expense categories repo ---
+
+export const expenseCategoryRepo = {
+  list: async (): Promise<Array<{
+    id: string;
+    code: string;
+    name: string;
+    description: string | null;
+    status: string;
+  }>> => {
+    const rows = await listAll<{
+      id: string;
+      code: string;
+      name: string;
+      description: string | null;
+      status: string;
+    }>('expense-categories');
+    return rows.map((r) => ({
+      id: r.id,
+      code: r.code,
+      name: r.name,
+      description: r.description,
+      status: r.status,
+    }));
+  },
+  create: async (data: { code: string; name: string; description?: string }): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    description: string | null;
+    status: string;
+  }> => {
+    const ctx = await getDefaultContext();
+    return apiFetch('expense-categories', {
+      method: 'POST',
+      body: {
+        companyId: ctx.companyId,
+        branchId: ctx.branchId,
+        code: data.code,
+        name: data.name,
+        description: data.description,
+      },
+    });
   },
 };

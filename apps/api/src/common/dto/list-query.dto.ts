@@ -61,4 +61,24 @@ export class ListQueryDto {
   @IsOptional()
   @MaxLength(200)
   q?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by status (e.g. active, inactive, pending)' })
+  @IsOptional()
+  @MaxLength(50)
+  status?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by customer ID' })
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by supplier ID' })
+  @IsOptional()
+  @IsUUID()
+  supplierId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by tank ID' })
+  @IsOptional()
+  @IsUUID()
+  tankId?: string;
 }

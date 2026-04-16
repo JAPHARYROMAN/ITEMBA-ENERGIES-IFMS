@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -50,7 +50,7 @@ export class PaymentsController extends BaseListController {
   @Permissions('credit:read')
   @ApiOperation({ summary: 'List payments' })
   @ApiResponse({ status: 200 })
-  async list(@Query() query: ListQueryDto & { branchId?: string; companyId?: string; customerId?: string; dateFrom?: string; dateTo?: string }) {
+  async list(@Query() query: ListQueryDto) {
     const params = getListParams(query);
     const { data, total } = await this.paymentsService.findPage({
       page: query.page,
@@ -62,5 +62,31 @@ export class PaymentsController extends BaseListController {
       dateTo: query.dateTo,
     });
     return this.listResponse(data, total, { page: params.page, pageSize: params.pageSize });
+  }
+
+  @Get(':id')
+  @Permissions('credit:read')
+  @ApiOperation({ summary: 'Get payment by ID with allocations' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Credit payment not found' })
+  async getById(@Param('id', ParseUUIDPipe) id: string) {
+    return this.paymentsService.getById(id);
+  }
+
+  @Post(':id/void')
+  @Permissions('credit:write')
+  @ApiOperation({ summary: 'Void credit payment and reverse invoice allocations' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Payment not found' })
+  async voidPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ) {
+    return this.paymentsService.voidPayment(id, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 }

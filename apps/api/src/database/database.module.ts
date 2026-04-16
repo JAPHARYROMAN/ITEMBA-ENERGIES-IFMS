@@ -14,7 +14,21 @@ export const PG_POOL = 'PG_POOL';
       provide: PG_POOL,
       useFactory: (configService: ConfigService) => {
         const connectionString = configService.get<string>('DATABASE_URL');
-        return new Pool({ connectionString });
+        const dbSsl = configService.get<string>('DB_SSL', 'false');
+        let ssl: boolean | { rejectUnauthorized: boolean } = false;
+        if (dbSsl === 'require' || dbSsl === 'true') {
+          ssl = { rejectUnauthorized: true };
+        } else if (dbSsl === 'no-verify') {
+          ssl = { rejectUnauthorized: false };
+        }
+        return new Pool({
+          connectionString,
+          ssl,
+          max: configService.get<number>('DB_POOL_MAX', 20),
+          idleTimeoutMillis: configService.get<number>('DB_POOL_IDLE_TIMEOUT', 30_000),
+          connectionTimeoutMillis: configService.get<number>('DB_POOL_CONN_TIMEOUT', 5_000),
+          statement_timeout: configService.get<number>('DB_STATEMENT_TIMEOUT', 30_000),
+        });
       },
       inject: [ConfigService],
     },

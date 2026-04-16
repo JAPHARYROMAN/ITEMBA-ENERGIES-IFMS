@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -31,6 +32,7 @@ export class GovernanceController {
   }
 
   @Post('policies')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('setup:write')
   @ApiOperation({ summary: 'Create governance policy (Manager)' })
   @ApiResponse({ status: 201 })
@@ -51,7 +53,7 @@ export class GovernanceController {
   @ApiOperation({ summary: 'Update governance policy (Manager)' })
   @ApiResponse({ status: 200 })
   updatePolicy(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePolicyDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -76,11 +78,12 @@ export class GovernanceController {
   @Permissions('setup:read', 'reports:read', 'shifts:read', 'expenses:read', 'sales:read', 'deliveries:read', 'adjustments:read')
   @ApiOperation({ summary: 'Get approval request details with computed overdue fields' })
   @ApiResponse({ status: 200 })
-  getRequest(@Param('id') id: string, @CurrentUser() user: JwtPayloadUser) {
+  getRequest(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: JwtPayloadUser) {
     return this.governance.getApprovalByIdForActor(id, { userId: user.sub, permissions: user.permissions });
   }
 
   @Post('approvals')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('setup:write', 'shifts:close', 'expenses:write', 'sales:void', 'adjustments:write', 'deliveries:write')
   @ApiOperation({ summary: 'Create approval request (draft)' })
   @ApiResponse({ status: 201 })
@@ -101,7 +104,7 @@ export class GovernanceController {
   @ApiOperation({ summary: 'Submit approval request for workflow processing' })
   @ApiResponse({ status: 200 })
   submitApproval(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ) {
@@ -113,11 +116,12 @@ export class GovernanceController {
   }
 
   @Post('approvals/:id/approve')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('shifts:approve', 'setup:write', 'expenses:write', 'sales:void', 'adjustments:write', 'deliveries:write')
   @ApiOperation({ summary: 'Approve current pending approval step' })
   @ApiResponse({ status: 200 })
   approve(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ActionReasonDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -131,11 +135,12 @@ export class GovernanceController {
   }
 
   @Post('approvals/:id/reject')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('shifts:approve', 'setup:write', 'expenses:write', 'sales:void', 'adjustments:write', 'deliveries:write')
   @ApiOperation({ summary: 'Reject current pending approval step' })
   @ApiResponse({ status: 200 })
   reject(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ActionReasonDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -153,7 +158,7 @@ export class GovernanceController {
   @ApiOperation({ summary: 'Cancel approval request' })
   @ApiResponse({ status: 200 })
   cancel(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ActionReasonDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,

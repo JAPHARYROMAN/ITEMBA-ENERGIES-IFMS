@@ -18,11 +18,13 @@ dist-ssr
 apps/api/.env
 apps/api/.env.*
 !.env.example
-!.env.staging
-!.env.production
 !apps/api/.env.example
-!apps/api/.env.staging
-!apps/api/.env.production
+
+# Build artifacts
+apps/api/build_errors.txt
+
+# AI assistant config
+.claude/
 
 # Editor directories and files
 .vscode/*

@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
@@ -10,7 +11,11 @@ import { BaseListController } from '../../common/base/base-list.controller';
 import { ListQueryDto } from '../../common/dto/list-query.dto';
 import type { ListResponse } from '../../common/interfaces/response-envelope';
 import { getListParams } from '../../common/helpers/list.helper';
-import { SalesService, type SaleTransactionDetail, type SaleTransactionListItem } from './sales.service';
+import {
+  SalesService,
+  type SaleTransactionDetail,
+  type SaleTransactionListItem,
+} from './sales.service';
 import { CreatePosSaleDto } from './dto/create-pos-sale.dto';
 import { VoidTransactionDto } from './dto/void-transaction.dto';
 
@@ -24,10 +29,14 @@ export class SalesController extends BaseListController {
   }
 
   @Post('pos')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Permissions('sales:pos')
   @ApiOperation({ summary: 'Create a POS sale' })
   @ApiResponse({ status: 201, description: 'Sale created' })
-  @ApiResponse({ status: 400, description: 'Validation: payment sum vs total, discount reason, etc.' })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation: payment sum vs total, discount reason, etc.',
+  })
   async createPosSale(
     @Body() dto: CreatePosSaleDto,
     @CurrentUser() user: JwtPayloadUser,
@@ -45,7 +54,7 @@ export class SalesController extends BaseListController {
   @ApiOperation({ summary: 'List sale transactions' })
   @ApiResponse({ status: 200 })
   async list(
-    @Query() query: ListQueryDto & { status?: string },
+    @Query() query: ListQueryDto,
   ): Promise<ListResponse<SaleTransactionListItem>> {
     const params = getListParams(query);
     const { data, total } = await this.salesService.findPage({
@@ -65,18 +74,22 @@ export class SalesController extends BaseListController {
   @ApiOperation({ summary: 'Get sale transaction by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<SaleTransactionDetail> {
-    return this.salesService.findById(id);
+  async getById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<SaleTransactionDetail> {
+    return this.salesService.findById(id, companyId);
   }
 
   @Post('transactions/:id/void')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Permissions('sales:void')
   @ApiOperation({ summary: 'Void a transaction (Manager only, requires reason)' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 400, description: 'Already voided or missing reason' })
   @ApiResponse({ status: 404 })
   async void(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: VoidTransactionDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,

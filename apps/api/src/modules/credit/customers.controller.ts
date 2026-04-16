@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -23,7 +23,7 @@ import { BaseListController } from '../../common/base/base-list.controller';
 import { ListQueryDto } from '../../common/dto/list-query.dto';
 import type { ListResponse } from '../../common/interfaces/response-envelope';
 import { getListParams } from '../../common/helpers/list.helper';
-import { CustomersService, type CustomerItem, type CustomersListParams } from './customers.service';
+import { CustomersService, type CustomerItem } from './customers.service';
 import { CreditStatementService, type CustomerStatement } from './credit-statement.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
@@ -46,7 +46,9 @@ export class CustomersController extends BaseListController {
   @Permissions('credit:read')
   @ApiOperation({ summary: 'List customers' })
   @ApiResponse({ status: 200 })
-  async list(@Query() query: ListQueryDto & CustomersListParams): Promise<ListResponse<CustomerItem>> {
+  async list(
+    @Query() query: ListQueryDto,
+  ): Promise<ListResponse<CustomerItem>> {
     const params = getListParams(query);
     const { data, total } = await this.customersService.findPage({
       page: query.page,
@@ -61,11 +63,13 @@ export class CustomersController extends BaseListController {
 
   @Get(':id/statement')
   @Permissions('credit:read')
-  @ApiOperation({ summary: 'Get customer statement (opening balance, invoices, payments, running balance)' })
+  @ApiOperation({
+    summary: 'Get customer statement (opening balance, invoices, payments, running balance)',
+  })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   async getStatement(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('dateFrom') dateFrom: string,
     @Query('dateTo') dateTo: string,
   ): Promise<CustomerStatement> {
@@ -79,8 +83,11 @@ export class CustomersController extends BaseListController {
   @ApiOperation({ summary: 'Get customer by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<CustomerItem> {
-    return this.customersService.findById(id);
+  async getById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<CustomerItem> {
+    return this.customersService.findById(id, companyId);
   }
 
   @Post()
@@ -116,7 +123,7 @@ export class CustomersController extends BaseListController {
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCustomerDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -135,7 +142,7 @@ export class CustomersController extends BaseListController {
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
   async delete(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {
@@ -151,7 +158,7 @@ export class CustomersController extends BaseListController {
   @ApiOperation({ summary: 'Add internal customer note (audit logged)' })
   @ApiResponse({ status: 201 })
   async addNote(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CustomerNoteDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -168,15 +175,20 @@ export class CustomersController extends BaseListController {
   @ApiOperation({ summary: 'Record customer-side operational action' })
   @ApiResponse({ status: 201 })
   async recordAction(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CustomerActionDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<{ ok: true; action: string }> {
-    return this.customersService.recordAction(id, dto.action, { note: dto.note, ...dto.payload }, {
-      userId: user.sub,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'],
-    });
+    return this.customersService.recordAction(
+      id,
+      dto.action,
+      { note: dto.note, ...dto.payload },
+      {
+        userId: user.sub,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      },
+    );
   }
 }

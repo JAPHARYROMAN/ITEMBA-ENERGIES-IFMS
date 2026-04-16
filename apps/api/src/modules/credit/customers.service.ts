@@ -1,10 +1,12 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
 import { customers } from '../../database/schema/credit/customers';
+import { creditInvoices } from '../../database/schema/credit/credit-invoices';
 import { branches } from '../../database/schema/core/branches';
 import { stations } from '../../database/schema/core/stations';
 import { getListParams } from '../../common/helpers/list.helper';
@@ -59,10 +61,7 @@ export class CustomersService {
     if (params.companyId) conditions.push(eq(customers.companyId, params.companyId));
     if (params.status) conditions.push(eq(customers.status, params.status));
     const searchWhere = params.q
-      ? or(
-          ilike(customers.code, `%${params.q}%`),
-          ilike(customers.name, `%${params.q}%`),
-        )
+      ? or(ilike(customers.code, `%${params.q}%`), ilike(customers.name, `%${params.q}%`))
       : undefined;
     if (params.q) conditions.push(searchWhere!);
     const w = conditions.length > 1 ? and(...conditions) : conditions[0];
@@ -89,12 +88,17 @@ export class CustomersService {
         .orderBy(desc(customers.createdAt))
         .limit(limit)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` }).from(customers).where(w),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(customers)
+        .where(w),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
-  async findById(id: string): Promise<CustomerItem> {
+  async findById(id: string, companyId?: string): Promise<CustomerItem> {
+    const conditions = [eq(customers.id, id), isNull(customers.deletedAt)];
+    if (companyId) conditions.push(eq(customers.companyId, companyId));
     const [row] = await this.db
       .select({
         id: customers.id,
@@ -113,7 +117,7 @@ export class CustomersService {
         createdAt: customers.createdAt,
       })
       .from(customers)
-      .where(and(eq(customers.id, id), isNull(customers.deletedAt)));
+      .where(and(...conditions));
     if (!row) throw new NotFoundException('Customer not found');
     return row;
   }
@@ -141,7 +145,7 @@ export class CustomersService {
     const [station] = await this.db
       .select({ companyId: stations.companyId })
       .from(stations)
-      .where(eq(stations.id, branch.stationId));
+      .where(and(eq(stations.id, branch.stationId), isNull(stations.deletedAt)));
     if (!station) throw new NotFoundException('Station not found');
 
     const code = payload.code.trim();
@@ -180,7 +184,7 @@ export class CustomersService {
           status: customers.status,
           createdAt: customers.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({
         entity: 'customers',
         entityId: inserted.id,
@@ -192,22 +196,29 @@ export class CustomersService {
       });
       return inserted;
     } catch (err) {
-      throwConflictIfUniqueViolation(err, `Customer with code "${code}" already exists in this branch`);
+      throwConflictIfUniqueViolation(
+        err,
+        `Customer with code "${code}" already exists in this branch`,
+      );
       throw err;
     }
   }
 
-  async update(id: string, payload: Partial<{
-    code: string;
-    name: string;
-    email: string;
-    phone: string;
-    address: string;
-    taxId: string;
-    creditLimit: number;
-    paymentTerms: string;
-    status: string;
-  }>, ctx: AuditContext): Promise<CustomerItem> {
+  async update(
+    id: string,
+    payload: Partial<{
+      code: string;
+      name: string;
+      email: string;
+      phone: string;
+      address: string;
+      taxId: string;
+      creditLimit: number;
+      paymentTerms: string;
+      status: string;
+    }>,
+    ctx: AuditContext,
+  ): Promise<CustomerItem> {
     const before = await this.findById(id);
     const updates: Record<string, unknown> = {
       updatedAt: new Date(),
@@ -227,13 +238,18 @@ export class CustomersService {
       const [existing] = await this.db
         .select({ id: customers.id })
         .from(customers)
-        .where(and(
-          eq(customers.companyId, before.companyId),
-          eq(customers.branchId, before.branchId),
-          eq(customers.code, payload.code.trim()),
-          isNull(customers.deletedAt),
-        ));
-      if (existing) throw new ConflictException(`Customer with code "${payload.code}" already exists in this branch`);
+        .where(
+          and(
+            eq(customers.companyId, before.companyId),
+            eq(customers.branchId, before.branchId),
+            eq(customers.code, payload.code.trim()),
+            isNull(customers.deletedAt),
+          ),
+        );
+      if (existing)
+        throw new ConflictException(
+          `Customer with code "${payload.code}" already exists in this branch`,
+        );
     }
     try {
       const [updated] = await this.db
@@ -276,6 +292,12 @@ export class CustomersService {
 
   async remove(id: string, ctx: AuditContext): Promise<void> {
     const before = await this.findById(id);
+    const [dep] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(creditInvoices)
+      .where(and(eq(creditInvoices.customerId, id), isNull(creditInvoices.deletedAt)));
+    if (Number(dep.count) > 0)
+      throw new BadRequestException(`Cannot delete customer: has ${dep.count} active credit invoice(s)`);
     await this.db
       .update(customers)
       .set({
@@ -289,6 +311,29 @@ export class CustomersService {
       entityId: id,
       action: 'delete',
       before: before as object,
+      userId: ctx.userId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+  }
+
+  async softDelete(id: string, ctx: AuditContext): Promise<void> {
+    const before = await this.findById(id);
+    const now = new Date();
+    await this.db
+      .update(customers)
+      .set({
+        deletedAt: now,
+        updatedAt: now,
+        ...(ctx.userId && { updatedBy: ctx.userId }),
+      })
+      .where(eq(customers.id, id));
+    await this.audit.log({
+      entity: 'customers',
+      entityId: id,
+      action: 'soft-delete',
+      before: before as object,
+      after: { ...before, deletedAt: now } as object,
       userId: ctx.userId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,

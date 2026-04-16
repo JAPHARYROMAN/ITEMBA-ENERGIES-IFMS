@@ -9,12 +9,11 @@ import { IFMSDataTable } from '../ifms/DataTable';
 import DetailsDrawer from '../ifms/DetailsDrawer';
 import { useAppStore } from '../../store';
 import { useReportsStore } from '../../store';
-import { downloadCSV } from '../../lib/exportUtils';
+import { ExportButton } from '../ifms/ExportButton';
 import { 
   History, 
   Fuel, 
   Wallet, 
-  Download, 
   AlertCircle, 
   CheckCircle2, 
   Clock,
@@ -22,11 +21,13 @@ import {
   TrendingUp
 } from 'lucide-react';
 import { TableSkeleton } from '../ifms/Skeletons';
+import { useCurrency } from '../../lib/hooks/useCurrency';
 
 type TabType = 'shifts' | 'pumps' | 'payments';
 
 const DailyOperationsReport: React.FC = () => {
   const { addToast } = useAppStore();
+  const { fmt, fmtCompact, header, symbol } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
   const [activeTab, setActiveTab] = useState<TabType>('shifts');
   const [selectedShift, setSelectedShift] = useState<any>(null);
@@ -54,35 +55,13 @@ const DailyOperationsReport: React.FC = () => {
     { id: 'payments', label: 'Payments Mix', icon: Wallet },
   ];
 
-  const handleExport = () => {
-    const date = new Date().toISOString().slice(0, 10);
-    if (activeTab === 'shifts') {
-      const data = shifts || [];
-      downloadCSV(`daily-shifts-${date}.csv`, ['Shift ID', 'Cashier', 'Expected ($)', 'Actual ($)', 'Variance', 'Efficiency', 'Status'], data.map((s: any) => [s.id, s.cashierName, s.expectedSales, s.actualSales, s.variance, s.efficiency, s.status]));
-    } else if (activeTab === 'pumps') {
-      const data = pumps || [];
-      downloadCSV(`daily-pumps-${date}.csv`, ['Pump ID', 'Nozzle', 'Product', 'Liters', 'Revenue', 'Uptime', 'Status'], data.map((p: any) => [p.id, p.nozzle, p.product, p.liters, p.revenue, p.uptime, p.status]));
-    } else {
-      const data = payments || [];
-      const rows: (string | number)[][] = Object.entries(data as Record<string, number>).map(([method, amount]) => [method, amount]);
-      downloadCSV(`daily-payments-${date}.csv`, ['Payment Method', 'Amount'], rows);
-    }
-    addToast('CSV exported', 'success');
-  };
-
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-12">
       <PageHeader 
         title="Daily Operations" 
         description="Granular audit and performance tracking across shifts and assets."
         actions={
-          <button 
-            onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-bold shadow-lg shadow-primary/20 hover:opacity-90"
-          >
-            <Download size={16} />
-            Export CSV
-          </button>
+          <ExportButton exportType="reports.daily-operations" params={{ ...filters, activeTab }} label="Export" />
         }
       />
 
@@ -113,7 +92,7 @@ const DailyOperationsReport: React.FC = () => {
               <div className="bg-card p-4 rounded-xl border border-border shadow-sm">
                 <p className="text-[10px] font-bold text-muted-foreground uppercase mb-1">Avg. Shift Variance</p>
                 <div className="flex items-center gap-2">
-                <span className="text-xl font-black text-rose-500">${dailyQuery.data?.stats?.avgShiftVariance?.toFixed?.(2) ?? '0.00'}</span>
+                <span className="text-xl font-black text-rose-500">{fmt(dailyQuery.data?.stats?.avgShiftVariance ?? 0)}</span>
                   <TrendingDown size={14} className="text-rose-500" />
                 </div>
               </div>
@@ -140,11 +119,11 @@ const DailyOperationsReport: React.FC = () => {
                 columns={[
                   { header: 'Shift ID', accessorKey: 'id' },
                   { header: 'Cashier', accessorKey: 'cashierName' },
-                  { header: 'Expected ($)', accessorKey: 'expectedSales', cell: (s: any) => s.expectedSales.toLocaleString(undefined, { minimumFractionDigits: 2 }) },
-                  { header: 'Actual ($)', accessorKey: 'actualSales', cell: (s: any) => s.actualSales.toLocaleString(undefined, { minimumFractionDigits: 2 }) },
-                  { header: 'Variance ($)', accessorKey: 'variance', cell: (s: any) => (
+                  { header: header('Expected'), accessorKey: 'expectedSales', cell: (s: any) => fmt(s.expectedSales) },
+                  { header: header('Actual'), accessorKey: 'actualSales', cell: (s: any) => fmt(s.actualSales) },
+                  { header: header('Variance'), accessorKey: 'variance', cell: (s: any) => (
                     <span className={s.variance < 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
-                      {s.variance.toFixed(2)}
+                      {fmt(s.variance)}
                     </span>
                   )},
                   { header: 'Efficiency', accessorKey: 'efficiency', cell: (s: any) => (
@@ -183,7 +162,7 @@ const DailyOperationsReport: React.FC = () => {
                   { header: 'Nozzle', accessorKey: 'nozzle' },
                   { header: 'Product', accessorKey: 'product' },
                   { header: 'Liters Sold', accessorKey: 'liters', cell: (p: any) => p.liters.toLocaleString() },
-                  { header: 'Revenue ($)', accessorKey: 'revenue', cell: (p: any) => p.revenue.toLocaleString() },
+                  { header: header('Revenue'), accessorKey: 'revenue', cell: (p: any) => fmtCompact(p.revenue) },
                   { header: 'Uptime', accessorKey: 'uptime', cell: (p: any) => (
                     <span className={p.uptime < 90 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
                       {p.uptime}%
@@ -209,7 +188,7 @@ const DailyOperationsReport: React.FC = () => {
                   <div key={i} className="flex flex-col gap-2">
                     <div className="flex justify-between items-center text-sm font-bold">
                       <span>{p.name}</span>
-                      <span>${p.value.toLocaleString()}</span>
+                      <span>{fmtCompact(p.value)}</span>
                     </div>
                     <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                       <div className="h-full bg-primary" style={{ width: `${(p.value / 120000) * 100}%` }} />
@@ -254,17 +233,17 @@ const DailyOperationsReport: React.FC = () => {
             <div className="space-y-3">
               <div className="flex justify-between items-center text-sm">
                 <span className="text-muted-foreground">Expected Revenue</span>
-                <span className="font-bold">${selectedShift?.expectedSales.toLocaleString()}</span>
+                <span className="font-bold">{fmtCompact(selectedShift?.expectedSales ?? 0)}</span>
               </div>
               <div className="flex justify-between items-center text-sm">
                 <span className="text-muted-foreground">Actual Revenue</span>
-                <span className="font-bold">${selectedShift?.actualSales.toLocaleString()}</span>
+                <span className="font-bold">{fmtCompact(selectedShift?.actualSales ?? 0)}</span>
               </div>
               <div className="h-px bg-border my-2" />
               <div className="flex justify-between items-center text-lg font-black">
                 <span>Variance</span>
                 <span className={selectedShift?.variance < 0 ? 'text-rose-500' : 'text-emerald-500'}>
-                  ${selectedShift?.variance.toFixed(2)}
+                  {fmt(selectedShift?.variance ?? 0)}
                 </span>
               </div>
             </div>

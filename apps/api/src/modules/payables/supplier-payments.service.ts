@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
@@ -106,7 +107,7 @@ export class SupplierPaymentsService {
     const [station] = await this.db
       .select({ companyId: stations.companyId })
       .from(stations)
-      .where(eq(stations.id, branch.stationId));
+      .where(and(eq(stations.id, branch.stationId), isNull(stations.deletedAt)));
     if (!station) throw new NotFoundException('Station not found');
     const [supplier] = await this.db
       .select({ id: suppliers.id, companyId: suppliers.companyId })
@@ -207,7 +208,7 @@ export class SupplierPaymentsService {
           referenceNo: supplierPayments.referenceNo,
           createdAt: supplierPayments.createdAt,
         });
-      if (!pay) throw new Error('Failed to insert payment');
+      if (!pay) throw new InternalServerErrorException('Failed to insert payment');
 
       for (const a of allocationsToUse) {
         await tx.insert(supplierPaymentAllocations).values({
@@ -249,7 +250,106 @@ export class SupplierPaymentsService {
       return [pay];
     });
 
-    if (!inserted) throw new Error('Payment insert failed');
+    if (!inserted) throw new InternalServerErrorException('Payment insert failed');
     return inserted;
+  }
+
+  async getById(id: string): Promise<SupplierPaymentItem & { allocations: { invoiceId: string; amount: string }[] }> {
+    const [payment] = await this.db
+      .select({
+        id: supplierPayments.id,
+        companyId: supplierPayments.companyId,
+        branchId: supplierPayments.branchId,
+        supplierId: supplierPayments.supplierId,
+        amount: supplierPayments.amount,
+        method: supplierPayments.method,
+        paymentDate: supplierPayments.paymentDate,
+        referenceNo: supplierPayments.referenceNo,
+        createdAt: supplierPayments.createdAt,
+      })
+      .from(supplierPayments)
+      .where(and(eq(supplierPayments.id, id), isNull(supplierPayments.deletedAt)));
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    const allocations = await this.db
+      .select({
+        invoiceId: supplierPaymentAllocations.invoiceId,
+        amount: supplierPaymentAllocations.amount,
+      })
+      .from(supplierPaymentAllocations)
+      .where(eq(supplierPaymentAllocations.paymentId, payment.id));
+
+    return { ...payment, allocations };
+  }
+
+  async voidPayment(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
+    const [payment] = await this.db
+      .select()
+      .from(supplierPayments)
+      .where(and(eq(supplierPayments.id, id), isNull(supplierPayments.deletedAt)));
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    const allocations = await this.db
+      .select({
+        invoiceId: supplierPaymentAllocations.invoiceId,
+        amount: supplierPaymentAllocations.amount,
+      })
+      .from(supplierPaymentAllocations)
+      .where(eq(supplierPaymentAllocations.paymentId, id));
+
+    const now = new Date();
+
+    await this.db.transaction(async (tx) => {
+      // Reverse each allocation: add the amount back to invoice balanceRemaining
+      for (const alloc of allocations) {
+        const [inv] = await tx
+          .select({
+            balanceRemaining: supplierInvoices.balanceRemaining,
+            totalAmount: supplierInvoices.totalAmount,
+          })
+          .from(supplierInvoices)
+          .where(eq(supplierInvoices.id, alloc.invoiceId));
+        if (inv) {
+          const newRemaining = Number(inv.balanceRemaining || 0) + Number(alloc.amount);
+          const total = Number(inv.totalAmount || 0);
+          const status = newRemaining >= total - 0.01 ? STATUS_UNPAID : STATUS_PARTIAL;
+          await tx
+            .update(supplierInvoices)
+            .set({
+              balanceRemaining: String(Math.min(newRemaining, total).toFixed(2)),
+              status,
+              updatedAt: now,
+              ...(ctx.userId && { updatedBy: ctx.userId }),
+            })
+            .where(eq(supplierInvoices.id, alloc.invoiceId));
+        }
+      }
+
+      // Soft-delete the payment
+      await tx
+        .update(supplierPayments)
+        .set({
+          deletedAt: now,
+          updatedAt: now,
+          ...(ctx.userId && { updatedBy: ctx.userId }),
+        })
+        .where(eq(supplierPayments.id, id));
+
+      await this.audit.log(
+        {
+          entity: 'supplier_payments',
+          entityId: id,
+          action: 'void',
+          before: payment as object,
+          after: { ...payment, deletedAt: now } as object,
+          userId: ctx.userId,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+        tx as NodePgDatabase<Schema>,
+      );
+    });
+
+    return { success: true };
   }
 }

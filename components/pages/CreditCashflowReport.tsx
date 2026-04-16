@@ -9,8 +9,8 @@ import StatCard from '../ifms/StatCard';
 import { IFMSDataTable } from '../ifms/DataTable';
 import DetailsDrawer from '../ifms/DetailsDrawer';
 import { useAppStore } from '../../store';
-import { downloadCSV } from '../../lib/exportUtils';
 import { useReportsStore } from '../../store';
+import { ExportButton } from '../ifms/ExportButton';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   PieChart, Pie, Cell, Legend
@@ -31,9 +31,11 @@ import {
   Zap
 } from 'lucide-react';
 import { DashboardSkeleton, TableSkeleton } from '../ifms/Skeletons';
+import { useCurrency } from '../../lib/hooks/useCurrency';
 
 const CreditCashflowReport: React.FC = () => {
   const { addToast } = useAppStore();
+  const { fmt, fmtCompact, header, symbol } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
   const [selectedDebtor, setSelectedDebtor] = useState<any>(null);
   const [sortRecentFirst, setSortRecentFirst] = useState(true);
@@ -73,6 +75,7 @@ const CreditCashflowReport: React.FC = () => {
         description="Strategic visibility into corporate liquidity, collection efficiency, and vendor obligations."
         actions={
           <div className="flex gap-2">
+            <ExportButton exportType="reports.credit-cashflow" params={filters} label="Export" />
             <button
               type="button"
               onClick={async () => {
@@ -87,9 +90,6 @@ const CreditCashflowReport: React.FC = () => {
             >
               Bulk Reminders
             </button>
-            <button type="button" onClick={() => { downloadCSV('ar-statement.csv', ['Customer', 'Outstanding', 'Limit', 'Utilization', 'Last PMT', 'Status'], sortedDebtors.map((d: any) => [d.name, d.balance, d.limit, `${d.utilization}%`, d.lastPayment, d.status])); addToast('AR statement downloaded', 'success'); }} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-bold shadow-lg shadow-primary/20 hover:opacity-90">
-              Download AR Statement
-            </button>
           </div>
         }
       />
@@ -98,9 +98,9 @@ const CreditCashflowReport: React.FC = () => {
 
       {/* High-Level Liquidity Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard label="Current Liquidity" value={`$${sim?.opening.toLocaleString()}`} delta={2.1} trend="up" />
-        <StatCard label="Total Receivables" value="$131,500" delta={15.0} trend="up" />
-        <StatCard label="Total Payables" value="$197,000" delta={-2.1} trend="down" />
+        <StatCard label="Current Liquidity" value={fmtCompact(sim?.opening ?? 0)} delta={2.1} trend="up" />
+        <StatCard label="Total Receivables" value={fmtCompact(131500)} delta={15.0} trend="up" />
+        <StatCard label="Total Payables" value={fmtCompact(197000)} delta={-2.1} trend="down" />
         <StatCard label="Collection Eff." value={`${sim?.efficiency}%`} delta={4.2} trend="up" />
       </div>
 
@@ -114,7 +114,7 @@ const CreditCashflowReport: React.FC = () => {
              <div className="relative z-10 space-y-8">
                 <div>
                    <h3 className="text-xs font-black uppercase tracking-[0.2em] text-emerald-400 mb-2">Liquidity Projection</h3>
-                   <p className="text-4xl font-black">${sim?.projected.toLocaleString()}</p>
+                   <p className="text-4xl font-black">{fmtCompact(sim?.projected ?? 0)}</p>
                    <p className="text-[10px] text-slate-400 uppercase font-bold mt-1">Projected balance at cycle end</p>
                 </div>
 
@@ -124,21 +124,21 @@ const CreditCashflowReport: React.FC = () => {
                         <ArrowUpRight size={14} className="text-emerald-500" />
                         Inflow (Collections)
                       </span>
-                      <span className="font-bold text-emerald-400">+${sim?.collections.toLocaleString()}</span>
+                      <span className="font-bold text-emerald-400">+{fmtCompact(sim?.collections ?? 0)}</span>
                    </div>
                    <div className="flex justify-between items-center text-sm">
                       <span className="text-slate-400 flex items-center gap-2">
                         <ArrowDownRight size={14} className="text-rose-500" />
                         Outflow (Vendor Payables)
                       </span>
-                      <span className="font-bold text-rose-400">-${sim?.payables.toLocaleString()}</span>
+                      <span className="font-bold text-rose-400">-{fmtCompact(sim?.payables ?? 0)}</span>
                    </div>
                    <div className="flex justify-between items-center text-sm">
                       <span className="text-slate-400 flex items-center gap-2">
                         <ArrowDownRight size={14} className="text-rose-500" />
                         Outflow (Operating Exp)
                       </span>
-                      <span className="font-bold text-rose-400">-${sim?.expenses.toLocaleString()}</span>
+                      <span className="font-bold text-rose-400">-{fmtCompact(sim?.expenses ?? 0)}</span>
                    </div>
                 </div>
 
@@ -166,7 +166,7 @@ const CreditCashflowReport: React.FC = () => {
                   <div key={i} className="space-y-2">
                     <div className="flex justify-between text-[11px] font-bold">
                        <span className="text-muted-foreground">{bucket.bucket}</span>
-                       <span>${bucket.amount.toLocaleString()}</span>
+                       <span>{fmtCompact(bucket.amount)}</span>
                     </div>
                     <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
                        <div className="h-full" style={{ width: `${(bucket.amount / 200000) * 100}%`, backgroundColor: bucket.color }} />
@@ -175,7 +175,7 @@ const CreditCashflowReport: React.FC = () => {
                 ))}
                 <div className="pt-4 flex items-center gap-2 text-[10px] text-muted-foreground italic leading-relaxed border-t border-border">
                    <AlertCircle size={12} className="text-rose-500" />
-                   Priority vendor "Shell Bulk" due for $32,000 settlement tomorrow.
+                   Priority vendor "Shell Bulk" due for {fmtCompact(32000)} settlement tomorrow.
                 </div>
              </div>
           </div>
@@ -233,7 +233,7 @@ const CreditCashflowReport: React.FC = () => {
                    onRowClick={(row) => setSelectedDebtor(row)}
                    columns={[
                      { header: 'Customer', accessorKey: 'name' },
-                     { header: 'Outstanding ($)', accessorKey: 'balance', cell: (d: any) => d.balance.toLocaleString() },
+                     { header: header('Outstanding'), accessorKey: 'balance', cell: (d: any) => fmtCompact(d.balance) },
                      { header: 'Credit Limit', accessorKey: 'limit', cell: (d: any) => d.limit.toLocaleString() },
                      { header: 'Utilization', accessorKey: 'utilization', cell: (d: any) => (
                         <div className="flex items-center gap-3">
@@ -267,7 +267,7 @@ const CreditCashflowReport: React.FC = () => {
            <div className="grid grid-cols-2 gap-4">
               <div className="p-4 bg-muted/30 border border-border rounded-2xl flex flex-col items-center justify-center text-center">
                  <p className="text-[10px] font-black uppercase text-muted-foreground mb-1">Current Balance</p>
-                 <p className="text-xl font-black text-foreground">${selectedDebtor?.balance.toLocaleString()}</p>
+                 <p className="text-xl font-black text-foreground">{fmtCompact(selectedDebtor?.balance ?? 0)}</p>
               </div>
               <div className="p-4 bg-muted/30 border border-border rounded-2xl flex flex-col items-center justify-center text-center">
                  <p className="text-[10px] font-black uppercase text-muted-foreground mb-1">Days Past Due</p>
@@ -312,12 +312,12 @@ const CreditCashflowReport: React.FC = () => {
                           <div className="flex items-center gap-3">
                              <FileText size={14} className="text-muted-foreground" />
                              <div>
-                                <p className="text-xs font-bold">{inv.id}</p>
+                                <p className="text-xs font-bold">{inv.invoiceNumber ?? inv.id}</p>
                                 <p className="text-[10px] text-muted-foreground">{inv.date}</p>
                              </div>
                           </div>
                           <div className="text-right">
-                             <p className="text-xs font-black">${inv.amount.toLocaleString()}</p>
+                             <p className="text-xs font-black">{fmtCompact(inv.amount)}</p>
                              <p className={`text-[9px] font-black uppercase ${inv.status === 'Overdue' ? 'text-rose-500' : 'text-amber-500'}`}>{inv.status}</p>
                           </div>
                        </div>
@@ -333,7 +333,7 @@ const CreditCashflowReport: React.FC = () => {
                                 <p className="text-[10px] text-muted-foreground">{pmt.date}</p>
                              </div>
                           </div>
-                          <p className="text-xs font-black text-emerald-600">+${pmt.amount.toLocaleString()}</p>
+                          <p className="text-xs font-black text-emerald-600">+{fmtCompact(pmt.amount)}</p>
                        </div>
                     ))}
                  </div>

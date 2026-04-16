@@ -39,7 +39,7 @@ describe('CompaniesService', () => {
 
   describe('findById', () => {
     it('should return company when found', async () => {
-      const company = { id: 'id-1', code: 'GEC', name: 'Global Energy', status: 'active', createdAt: new Date() };
+      const company = { id: 'id-1', code: 'GEC', name: 'Global Energy', currency: 'USD', status: 'active', createdAt: new Date() };
       const whereMock = jest.fn().mockResolvedValue([company]);
       db.select.mockReturnValue({ from: jest.fn().mockReturnValue({ where: whereMock }) });
 
@@ -58,7 +58,7 @@ describe('CompaniesService', () => {
 
   describe('create', () => {
     it('should create company and log audit', async () => {
-      const created = { id: 'new-id', code: 'NEW', name: 'New Co', status: 'active', createdAt: new Date() };
+      const created = { id: 'new-id', code: 'NEW', name: 'New Co', currency: 'USD', status: 'active', createdAt: new Date() };
       db.select.mockReturnValue({ from: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue([]) }) });
       db.insert.mockReturnValue({
         values: jest.fn().mockReturnValue({ returning: jest.fn().mockResolvedValue([created]) }),

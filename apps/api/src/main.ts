@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { json, urlencoded, type Request, type Response, type NextFunction } from 'express';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { TenantInterceptor } from './common/interceptors/tenant.interceptor';
 import { AppLogger } from './common/logger/logger.service';
 import { PG_POOL } from './database/database.module';
 import { runMigrationsOnStartup } from './database/migrate';
@@ -53,7 +54,7 @@ async function bootstrap() {
   app.use(urlencoded({ extended: true, limit: requestBodyLimit }));
 
   app.enableCors({
-    origin: (origin, callback) => {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked for origin: ${origin}`), false);
@@ -63,7 +64,9 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
-  app.setGlobalPrefix('api', { exclude: ['health/live', 'health/ready', 'docs', 'docs-json'] });
+  app.setGlobalPrefix('api', {
+    exclude: ['health/live', 'health/ready', 'docs', 'docs-json', 'public/report/verify', 'public/report/verify/receipt'],
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -75,6 +78,7 @@ async function bootstrap() {
   );
 
   app.useGlobalFilters(new HttpExceptionFilter(app.get(AppLogger)));
+  app.useGlobalInterceptors(new TenantInterceptor());
 
   if (runMigrations && process.env.NODE_ENV !== 'test') {
     if (process.env.NODE_ENV === 'production' && !allowProdStartupMigrations) {

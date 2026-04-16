@@ -7,13 +7,14 @@ import PageHeader from '../ifms/PageHeader';
 import FilterBar from '../ifms/FilterBar';
 import { IFMSDataTable } from '../ifms/DataTable';
 import DetailsDrawer from '../ifms/DetailsDrawer';
-import { FormSection, FormShell, FormSubmitState } from '../ifms/forms/Primitives';
+import { FormSection, FormShell, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
 import { TextField, NumberField, SelectField, ToggleField } from '../ifms/forms/Fields';
 import { TableSkeleton } from '../ifms/Skeletons';
-import { useAppStore, useAuthStore } from '../../store';
+import { hasAnyPermission, useAppStore, useAuthStore } from '../../store';
 import { apiGovernance, type GovernancePolicy } from '../../lib/api/governance';
 import { setupDataSource } from '../../lib/data-source';
 import { Plus, ShieldOff } from 'lucide-react';
+import { permissionGroups } from '../../lib/permissions';
 
 const stepSchema = z.object({
   stepOrder: z.coerce.number().min(1),
@@ -129,12 +130,12 @@ const GovernancePolicyForm: React.FC<{
           title={initialPolicy ? 'Edit Governance Policy' : 'Create Governance Policy'}
           description="Define approval thresholds and step workflow."
           actions={
-            <>
+            <PermissionGuard permissions={permissionGroups.setupWrite}>
               <button type="button" onClick={onCancel} className="px-5 py-2.5 text-xs font-black uppercase tracking-widest text-muted-foreground hover:bg-muted rounded-xl transition-all">Cancel</button>
               <button type="submit" disabled={isSubmitting} className="px-8 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-black uppercase tracking-widest shadow-xl shadow-primary/20">
                 <FormSubmitState loading={isSubmitting} label={initialPolicy ? 'Save Policy' : 'Create Policy'} />
               </button>
-            </>
+            </PermissionGuard>
           }
         >
           <FormSection title="Policy Scope" description="Entity/action and optional threshold gates.">
@@ -185,12 +186,12 @@ const GovernancePoliciesPage: React.FC = () => {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [activePolicy, setActivePolicy] = React.useState<GovernancePolicy | null>(null);
 
-  const isManager = user?.role === 'manager';
+  const canManagePolicies = hasAnyPermission(user, permissionGroups.setupWrite);
 
   const policiesQuery = useQuery({
     queryKey: ['governance-policies'],
     queryFn: () => apiGovernance.listPolicies(),
-    enabled: isManager,
+    enabled: canManagePolicies,
   });
 
   const filtered = React.useMemo(() => {
@@ -200,13 +201,13 @@ const GovernancePoliciesPage: React.FC = () => {
     return rows.filter((r) => [r.entityType, r.actionType, r.companyId, r.branchId ?? ''].some((v) => String(v).toLowerCase().includes(q)));
   }, [policiesQuery.data, search]);
 
-  if (!isManager) {
+  if (!canManagePolicies) {
     return (
       <div className="space-y-6 animate-in fade-in duration-500">
         <PageHeader title="Policies" description="Governance policy definitions." />
         <div className="bg-card border border-border rounded-2xl p-12 text-center">
           <ShieldOff className="mx-auto mb-4 text-muted-foreground" size={40} />
-          <p className="text-sm font-black uppercase tracking-widest text-muted-foreground">Manager access required to manage governance policies.</p>
+          <p className="text-sm font-black uppercase tracking-widest text-muted-foreground">Setup write permission required to manage governance policies.</p>
         </div>
       </div>
     );

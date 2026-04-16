@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -57,8 +57,11 @@ export class ProductsController extends BaseListController {
   @ApiOperation({ summary: 'Get product by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<ProductItem> {
-    return this.productsService.findById(id);
+  async getById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<ProductItem> {
+    return this.productsService.findById(id, companyId);
   }
 
   @Post()
@@ -92,7 +95,7 @@ export class ProductsController extends BaseListController {
   @ApiResponse({ status: 404 })
   @ApiResponse({ status: 409 })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProductDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
@@ -111,7 +114,7 @@ export class ProductsController extends BaseListController {
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
   async delete(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {

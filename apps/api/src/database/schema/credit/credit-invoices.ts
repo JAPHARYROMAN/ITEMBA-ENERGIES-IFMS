@@ -1,4 +1,4 @@
-import { index, numeric, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { index, numeric, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { auditColumns } from '../shared';
 import { companies } from '../core/companies';
 import { branches } from '../core/branches';
@@ -28,5 +28,6 @@ export const creditInvoices = pgTable(
     index('credit_invoices_company_branch_date_idx').on(t.companyId, t.branchId, t.invoiceDate),
     index('credit_invoices_customer_id_idx').on(t.customerId),
     index('credit_invoices_status_idx').on(t.status),
+    uniqueIndex('credit_invoices_company_invoice_number_unique').on(t.companyId, t.invoiceNumber),
   ],
 );

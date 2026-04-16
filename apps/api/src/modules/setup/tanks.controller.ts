@@ -1,4 +1,17 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param, ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -45,8 +58,11 @@ export class TanksController extends BaseListController {
   @ApiOperation({ summary: 'Get tank by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<TankItem> {
-    return this.tanksService.findById(id);
+  async getById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<TankItem> {
+    return this.tanksService.findById(id, companyId);
   }
 
   @Post()
@@ -54,7 +70,11 @@ export class TanksController extends BaseListController {
   @ApiOperation({ summary: 'Create tank' })
   @ApiResponse({ status: 201 })
   @ApiResponse({ status: 409 })
-  async create(@Body() dto: CreateTankDto, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<TankItem> {
+  async create(
+    @Body() dto: CreateTankDto,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ): Promise<TankItem> {
     return this.tanksService.create(
       {
         companyId: dto.companyId,
@@ -78,8 +98,17 @@ export class TanksController extends BaseListController {
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   @ApiResponse({ status: 409 })
-  async update(@Param('id') id: string, @Body() dto: UpdateTankDto, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<TankItem> {
-    return this.tanksService.update(id, dto, { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] });
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTankDto,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ): Promise<TankItem> {
+    return this.tanksService.update(id, dto, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 
   @Delete(':id')
@@ -88,7 +117,15 @@ export class TanksController extends BaseListController {
   @ApiOperation({ summary: 'Soft-delete tank' })
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
-  async delete(@Param('id') id: string, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<void> {
-    await this.tanksService.remove(id, { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] });
+  async delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.tanksService.remove(id, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 }

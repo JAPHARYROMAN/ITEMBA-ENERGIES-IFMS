@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -44,7 +44,7 @@ export class NozzlesController extends BaseListController {
   @ApiOperation({ summary: 'Get nozzle by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<NozzleItem> {
+  async getById(@Param('id', ParseUUIDPipe) id: string): Promise<NozzleItem> {
     return this.nozzlesService.findById(id);
   }
 
@@ -66,7 +66,7 @@ export class NozzlesController extends BaseListController {
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   @ApiResponse({ status: 409 })
-  async update(@Param('id') id: string, @Body() dto: UpdateNozzleDto, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<NozzleItem> {
+  async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateNozzleDto, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<NozzleItem> {
     return this.nozzlesService.update(id, dto, { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 
@@ -76,7 +76,7 @@ export class NozzlesController extends BaseListController {
   @ApiOperation({ summary: 'Soft-delete nozzle' })
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
-  async delete(@Param('id') id: string, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<void> {
+  async delete(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: JwtPayloadUser, @Req() req: Request): Promise<void> {
     await this.nozzlesService.remove(id, { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] });
   }
 }

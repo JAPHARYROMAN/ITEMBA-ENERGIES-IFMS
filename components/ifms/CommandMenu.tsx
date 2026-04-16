@@ -1,13 +1,14 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Command, ArrowRight, X } from 'lucide-react';
 // Fix: Correctly importing useNavigate from react-router-dom
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../../store';
 import { NAV_ITEMS } from '../../constants';
+import { useTranslation } from 'react-i18next';
 
 export const CommandMenu: React.FC = () => {
   const { isSearchOpen, setSearchOpen } = useAppStore();
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -36,9 +37,9 @@ export const CommandMenu: React.FC = () => {
 
   const flatNav = React.useMemo(() => {
     const items: { name: string; path: string; category: string }[] = [];
-    NAV_ITEMS.forEach(item => {
+    NAV_ITEMS.forEach((item) => {
       if (item.children) {
-        item.children.forEach(child => {
+        item.children.forEach((child) => {
           items.push({ name: child.name, path: child.path, category: item.name });
         });
       } else {
@@ -48,32 +49,41 @@ export const CommandMenu: React.FC = () => {
     return items;
   }, []);
 
-  const results = flatNav.filter(item => 
-    item.name.toLowerCase().includes(query.toLowerCase()) ||
-    item.category.toLowerCase().includes(query.toLowerCase())
-  ).slice(0, 8);
+  const results = flatNav
+    .filter(
+      (item) =>
+        item.name.toLowerCase().includes(query.toLowerCase()) ||
+        item.category.toLowerCase().includes(query.toLowerCase()),
+    )
+    .slice(0, 8);
 
   if (!isSearchOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh] px-4 animate-in fade-in duration-200">
-      <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm" onClick={() => setSearchOpen(false)} />
-      
+      <div
+        className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm"
+        onClick={() => setSearchOpen(false)}
+      />
+
       <div className="relative w-full max-w-xl bg-card border border-border shadow-2xl rounded-2xl overflow-hidden animate-in zoom-in-95 duration-200">
         <div className="flex items-center px-4 py-4 border-b border-border bg-muted/20">
           <Search size={18} className="text-muted-foreground mr-3" />
-          <input 
+          <input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Type a module or report name..."
+            placeholder={t('commandMenu.placeholder')}
             className="flex-1 bg-transparent border-none outline-none text-sm font-medium"
           />
           <div className="flex items-center gap-1.5 px-2 py-1 bg-muted rounded border border-border text-[10px] font-black text-muted-foreground">
             <Command size={10} />
             <span>K</span>
           </div>
-          <button onClick={() => setSearchOpen(false)} className="ml-4 p-1 hover:bg-muted rounded-full">
+          <button
+            onClick={() => setSearchOpen(false)}
+            className="ml-4 p-1 hover:bg-muted rounded-full"
+          >
             <X size={16} className="text-muted-foreground" />
           </button>
         </div>
@@ -96,27 +106,40 @@ export const CommandMenu: React.FC = () => {
                     </div>
                     <div className="text-left">
                       <p className="text-sm font-bold">{item.name}</p>
-                      <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">{item.category}</p>
+                      <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">
+                        {item.category}
+                      </p>
                     </div>
                   </div>
-                  <ChevronRight size={14} className="opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all text-primary" />
+                  <ChevronRight
+                    size={14}
+                    className="opacity-0 group-hover:opacity-100 -translate-x-2 group-hover:translate-x-0 transition-all text-primary"
+                  />
                 </button>
               ))}
             </div>
           ) : (
             <div className="py-12 flex flex-col items-center justify-center text-center opacity-40">
               <Search size={40} className="mb-4" />
-              <p className="text-sm font-bold">No matching modules found</p>
-              <p className="text-xs uppercase tracking-widest mt-1">Try searching for 'Reports' or 'Stations'</p>
+              <p className="text-sm font-bold">{t('commandMenu.noModules')}</p>
+              <p className="text-xs uppercase tracking-widest mt-1">
+                {t('commandMenu.searchHint')}
+              </p>
             </div>
           )}
         </div>
 
         <div className="p-3 bg-muted/30 border-t border-border flex items-center justify-between">
-          <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">Enterprise Command Palette</p>
+          <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
+            {t('commandMenu.palette')}
+          </p>
           <div className="flex gap-4">
-             <span className="flex items-center gap-1 text-[9px] text-muted-foreground uppercase font-bold"><kbd className="px-1 border border-border rounded">Esc</kbd> Close</span>
-             <span className="flex items-center gap-1 text-[9px] text-muted-foreground uppercase font-bold"><kbd className="px-1 border border-border rounded">↵</kbd> Select</span>
+            <span className="flex items-center gap-1 text-[9px] text-muted-foreground uppercase font-bold">
+              <kbd className="px-1 border border-border rounded">Esc</kbd> {t('commandMenu.close')}
+            </span>
+            <span className="flex items-center gap-1 text-[9px] text-muted-foreground uppercase font-bold">
+              <kbd className="px-1 border border-border rounded">↵</kbd> {t('commandMenu.select')}
+            </span>
           </div>
         </div>
       </div>
@@ -124,6 +147,18 @@ export const CommandMenu: React.FC = () => {
   );
 };
 
-const ChevronRight = ({ size, className }: { size: number, className: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m9 18 6-6-6-6"/></svg>
+const ChevronRight = ({ size, className }: { size: number; className: string }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <path d="m9 18 6-6-6-6" />
+  </svg>
 );

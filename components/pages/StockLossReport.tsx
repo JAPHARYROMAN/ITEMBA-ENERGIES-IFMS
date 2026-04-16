@@ -26,9 +26,12 @@ import {
 import { TableSkeleton } from '../ifms/Skeletons';
 import { useAppStore } from '../../store';
 import { useReportsStore } from '../../store';
+import { ExportButton } from '../ifms/ExportButton';
+import { useCurrency } from '../../lib/hooks/useCurrency';
 
 const StockLossReport: React.FC = () => {
   const { addToast } = useAppStore();
+  const { fmtCompact } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
   const [selectedLoss, setSelectedLoss] = useState<any>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -68,23 +71,26 @@ const StockLossReport: React.FC = () => {
         title="Stock Loss Intelligence" 
         description="Shrinkage monitoring, tank variance, and inventory reconciliation audit."
         actions={
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                await reportActionMutation.mutateAsync({
-                  action: 'request-physical-audit',
-                  payload: { stationId: stationId ?? null, productId: productId ?? null },
-                });
-                addToast('Physical audit request submitted for scheduling', 'success');
-              } catch (err: any) {
-                addToast(err?.apiError?.message ?? err?.message ?? 'Failed to request physical audit', 'error');
-              }
-            }}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-bold shadow-lg shadow-primary/20 hover:opacity-90"
-          >
-            Request Physical Audit
-          </button>
+          <div className="flex items-center gap-2">
+            <ExportButton exportType="reports.stock-loss" params={filters} label="Export" />
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await reportActionMutation.mutateAsync({
+                    action: 'request-physical-audit',
+                    payload: { stationId: stationId ?? null, productId: productId ?? null },
+                  });
+                  addToast('Physical audit request submitted for scheduling', 'success');
+                } catch (err: any) {
+                  addToast(err?.apiError?.message ?? err?.message ?? 'Failed to request physical audit', 'error');
+                }
+              }}
+              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-bold shadow-lg shadow-primary/20 hover:opacity-90"
+            >
+              Request Physical Audit
+            </button>
+          </div>
         }
       />
 
@@ -95,7 +101,7 @@ const StockLossReport: React.FC = () => {
         <div className="lg:col-span-4 space-y-6">
           <div className="grid grid-cols-1 gap-4">
              <StatCard label="Net Loss (Liters)" value={`${stockLossQuery.data?.summary?.netLossLiters ?? 0} L`} delta={0} trend="neutral" />
-             <StatCard label="Value Loss ($)" value={`$${stockLossQuery.data?.summary?.valueLoss ?? 0}`} delta={0} trend="neutral" />
+             <StatCard label="Value Loss" value={fmtCompact(stockLossQuery.data?.summary?.valueLoss ?? 0)} delta={0} trend="neutral" />
              <StatCard label="Avg. Shrinkage %" value={`${stockLossQuery.data?.summary?.avgShrinkagePct ?? 0}%`} delta={0} trend="neutral" />
           </div>
 

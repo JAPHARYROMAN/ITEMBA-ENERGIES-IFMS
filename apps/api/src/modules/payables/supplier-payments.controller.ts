@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -10,7 +10,7 @@ import { BaseListController } from '../../common/base/base-list.controller';
 import { ListQueryDto } from '../../common/dto/list-query.dto';
 import type { ListResponse } from '../../common/interfaces/response-envelope';
 import { getListParams } from '../../common/helpers/list.helper';
-import { SupplierPaymentsService } from './supplier-payments.service';
+import { SupplierPaymentsService, type SupplierPaymentItem } from './supplier-payments.service';
 import { CreateSupplierPaymentDto } from './dto/create-supplier-payment.dto';
 
 @ApiTags('supplier-payments')
@@ -47,7 +47,7 @@ export class SupplierPaymentsController extends BaseListController {
   @Permissions('payables:read')
   @ApiOperation({ summary: 'List supplier payments' })
   @ApiResponse({ status: 200 })
-  async list(@Query() query: ListQueryDto & { branchId?: string; companyId?: string; supplierId?: string; dateFrom?: string; dateTo?: string }): Promise<ListResponse<unknown>> {
+  async list(@Query() query: ListQueryDto): Promise<ListResponse<SupplierPaymentItem>> {
     const params = getListParams(query);
     const { data, total } = await this.supplierPaymentsService.findPage({
       page: query.page,
@@ -59,5 +59,31 @@ export class SupplierPaymentsController extends BaseListController {
       dateTo: query.dateTo,
     });
     return this.listResponse(data, total, { page: params.page, pageSize: params.pageSize });
+  }
+
+  @Get(':id')
+  @Permissions('payables:read')
+  @ApiOperation({ summary: 'Get supplier payment by ID' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Supplier payment not found' })
+  async getById(@Param('id', ParseUUIDPipe) id: string) {
+    return this.supplierPaymentsService.getById(id);
+  }
+
+  @Post(':id/void')
+  @Permissions('payables:write')
+  @ApiOperation({ summary: 'Void supplier payment and reverse invoice allocations' })
+  @ApiResponse({ status: 200 })
+  @ApiResponse({ status: 404, description: 'Payment not found' })
+  async voidPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadUser,
+    @Req() req: Request,
+  ) {
+    return this.supplierPaymentsService.voidPayment(id, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 }

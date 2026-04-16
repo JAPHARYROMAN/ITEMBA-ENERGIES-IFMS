@@ -1,10 +1,11 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
-import { products } from '../../database/schema/setup';
+import { products, tanks } from '../../database/schema/setup';
 import { parseSort } from '../../common/dto/sort.dto';
 import { getListParams } from '../../common/helpers/list.helper';
 import { throwConflictIfUniqueViolation } from '../../common/utils/db-errors';
@@ -12,7 +13,10 @@ import { AuditService } from '../audit/audit.service';
 
 type Schema = typeof schema;
 
-const SORT_COLUMNS: Record<string, typeof products.createdAt | typeof products.code | typeof products.name | typeof products.status> = {
+const SORT_COLUMNS: Record<
+  string,
+  typeof products.createdAt | typeof products.code | typeof products.name | typeof products.status
+> = {
   created_at: products.createdAt,
   createdAt: products.createdAt,
   code: products.code,
@@ -52,7 +56,10 @@ export class ProductsService {
     const order = this.getOrder(params.sort);
     const conditions = [isNull(products.deletedAt)];
     if (params.companyId) conditions.push(eq(products.companyId, params.companyId));
-    if (params.q) conditions.push(or(ilike(products.code, `%${params.q}%`), ilike(products.name, `%${params.q}%`))!);
+    if (params.q)
+      conditions.push(
+        or(ilike(products.code, `%${params.q}%`), ilike(products.name, `%${params.q}%`))!,
+      );
     const fullWhere = conditions.length > 1 ? and(...conditions) : conditions[0];
 
     const [data, countResult] = await Promise.all([
@@ -73,12 +80,17 @@ export class ProductsService {
         .orderBy(order)
         .limit(limit)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` }).from(products).where(fullWhere),
+      this.db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(products)
+        .where(fullWhere),
     ]);
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
-  async findById(id: string): Promise<ProductItem> {
+  async findById(id: string, companyId?: string): Promise<ProductItem> {
+    const conditions = [eq(products.id, id), isNull(products.deletedAt)];
+    if (companyId) conditions.push(eq(products.companyId, companyId));
     const [row] = await this.db
       .select({
         id: products.id,
@@ -92,7 +104,7 @@ export class ProductsService {
         createdAt: products.createdAt,
       })
       .from(products)
-      .where(and(eq(products.id, id), isNull(products.deletedAt)));
+      .where(and(...conditions));
     if (!row) throw new NotFoundException('Product not found');
     return row;
   }
@@ -111,7 +123,10 @@ export class ProductsService {
   ): Promise<ProductItem> {
     const code = payload.code.trim();
     await this.assertCodeUniqueInCompany(payload.companyId, code);
-    const price = typeof payload.pricePerUnit === 'number' ? String(payload.pricePerUnit) : payload.pricePerUnit;
+    const price =
+      typeof payload.pricePerUnit === 'number'
+        ? String(payload.pricePerUnit)
+        : payload.pricePerUnit;
     try {
       const [inserted] = await this.db
         .insert(products)
@@ -135,7 +150,7 @@ export class ProductsService {
           status: products.status,
           createdAt: products.createdAt,
         });
-      if (!inserted) throw new Error('Insert failed');
+      if (!inserted) throw new InternalServerErrorException('Insert failed');
       await this.audit.log({
         entity: 'products',
         entityId: inserted.id,
@@ -147,7 +162,10 @@ export class ProductsService {
       });
       return inserted;
     } catch (err) {
-      throwConflictIfUniqueViolation(err, `Product with code "${code}" already exists in this company`);
+      throwConflictIfUniqueViolation(
+        err,
+        `Product with code "${code}" already exists in this company`,
+      );
       throw err;
     }
   }
@@ -211,14 +229,26 @@ export class ProductsService {
       return updated;
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
-      throwConflictIfUniqueViolation(err, `Product with code "${payload.code}" already exists in this company`);
+      throwConflictIfUniqueViolation(
+        err,
+        `Product with code "${payload.code}" already exists in this company`,
+      );
       throw err;
     }
   }
 
-  async remove(id: string, auditContext: { userId?: string; ip?: string; userAgent?: string }): Promise<void> {
+  async remove(
+    id: string,
+    auditContext: { userId?: string; ip?: string; userAgent?: string },
+  ): Promise<void> {
     const before = await this.findByIdOrNull(id);
     if (!before) throw new NotFoundException('Product not found');
+    const [dep] = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(tanks)
+      .where(and(eq(tanks.productId, id), isNull(tanks.deletedAt)));
+    if (Number(dep.count) > 0)
+      throw new BadRequestException(`Cannot delete product: has ${dep.count} active tank(s)`);
     await this.db
       .update(products)
       .set({
@@ -260,13 +290,16 @@ export class ProductsService {
     const [existing] = await this.db
       .select({ id: products.id })
       .from(products)
-      .where(and(eq(products.companyId, companyId), eq(products.code, code)));
-    if (existing) throw new ConflictException(`Product with code "${code}" already exists in this company`);
+      .where(
+        and(eq(products.companyId, companyId), eq(products.code, code), isNull(products.deletedAt)),
+      );
+    if (existing)
+      throw new ConflictException(`Product with code "${code}" already exists in this company`);
   }
 
   private getOrder(sort?: string) {
     const parsed = parseSort(sort);
-    const col = parsed ? SORT_COLUMNS[parsed.field] ?? products.createdAt : products.createdAt;
+    const col = parsed ? (SORT_COLUMNS[parsed.field] ?? products.createdAt) : products.createdAt;
     const direction = parsed?.direction ?? 'desc';
     return direction === 'desc' ? desc(col) : asc(col);
   }

@@ -1,4 +1,6 @@
 import { index, jsonb, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { users } from './auth/users';
+import { companies } from './core/companies';
 
 export const auditLog = pgTable(
   'audit_log',
@@ -9,7 +11,8 @@ export const auditLog = pgTable(
     action: varchar('action', { length: 32 }).notNull(),
     beforeJson: jsonb('before_json'),
     afterJson: jsonb('after_json'),
-    actorUserId: uuid('actor_user_id'),
+    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    companyId: uuid('company_id').references(() => companies.id, { onDelete: 'restrict' }),
     ip: varchar('ip', { length: 45 }),
     userAgent: varchar('user_agent', { length: 512 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -17,6 +20,7 @@ export const auditLog = pgTable(
   (t) => [
     index('audit_log_entity_entity_id_idx').on(t.entity, t.entityId),
     index('audit_log_actor_user_id_idx').on(t.actorUserId),
+    index('audit_log_company_id_idx').on(t.companyId),
     index('audit_log_created_at_idx').on(t.createdAt),
   ],
 );

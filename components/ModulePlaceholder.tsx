@@ -1,39 +1,59 @@
-
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import PageHeader from './ifms/PageHeader';
 import { Lock, Database, Plus } from 'lucide-react';
-import { useAuthStore, useAppStore } from '../store';
+import { hasAnyPermission, useAuthStore, useAppStore } from '../store';
 import { stationRepo, customerRepo, saleRepo } from '../lib/repositories';
 import { TableSkeleton } from './ifms/Skeletons';
+import { permissionGroups } from '../lib/permissions';
+import { useTranslation } from 'react-i18next';
 
 const PLACEHOLDER_NEW_ROUTES: Record<string, string> = {
-  'transactions': '/app/sales/pos',
-  'receipts': '/app/sales/receipts',
-  'dips': '/app/deliveries/create',
-  'reconciliation': '/app/deliveries/grn',
-  'variance': '/app/reports/stock-loss',
+  transactions: '/app/sales/pos',
+  receipts: '/app/sales/receipts',
+  dips: '/app/inventory/dips',
+  reconciliation: '/app/deliveries/grn',
+  variance: '/app/reports/stock-loss',
   'create delivery': '/app/deliveries/create',
-  'grn': '/app/deliveries/grn',
-  'history': '/app/deliveries/grn',
+  grn: '/app/deliveries/grn',
+  history: '/app/deliveries/grn',
   'tank to tank': '/app/setup/tanks',
   'station to station': '/app/setup/stations',
-  'adjustments': '/app/setup/tanks',
-  'aging': '/app/credit/customers',
-  'suppliers': '/app/setup/companies',
-  'invoices': '/app/credit/invoices',
-  'customers': '/app/credit/customers',
-  'entries': '/app/expenses/entries',
+  adjustments: '/app/setup/tanks',
+  aging: '/app/credit/customers',
+  suppliers: '/app/setup/companies',
+  invoices: '/app/credit/invoices',
+  customers: '/app/credit/customers',
+  entries: '/app/expenses/entries',
   'petty cash': '/app/expenses/petty-cash',
-  'categories': '/app/expenses/entries',
-  'companies': '/app/setup/companies',
-  'stations': '/app/setup/stations',
-  'branches': '/app/setup/branches',
-  'tanks': '/app/setup/tanks',
+  categories: '/app/expenses/entries',
+  companies: '/app/setup/companies',
+  stations: '/app/setup/stations',
+  branches: '/app/setup/branches',
+  tanks: '/app/setup/tanks',
   'pumps nozzles': '/app/setup/pumps-nozzles',
-  'products': '/app/setup/companies',
-  'users roles': '/app/setup/companies',
+  products: '/app/setup/products',
+  'users roles': '/app/setup/users-roles',
+};
+
+const PLACEHOLDER_TARGET_PERMISSIONS: Record<string, string[]> = {
+  '/app/sales/pos': permissionGroups.salesPos,
+  '/app/sales/receipts': permissionGroups.salesRead,
+  '/app/deliveries/grn': permissionGroups.deliveriesRead,
+  '/app/reports/stock-loss': permissionGroups.reportsRead,
+  '/app/deliveries/create': permissionGroups.deliveriesWrite,
+  '/app/setup/tanks': permissionGroups.setupRead,
+  '/app/setup/stations': permissionGroups.setupRead,
+  '/app/credit/customers': permissionGroups.creditRead,
+  '/app/credit/invoices': permissionGroups.creditRead,
+  '/app/expenses/entries': permissionGroups.expensesRead,
+  '/app/expenses/petty-cash': permissionGroups.expensesRead,
+  '/app/setup/companies': permissionGroups.setupRead,
+  '/app/setup/branches': permissionGroups.setupRead,
+  '/app/setup/pumps-nozzles': permissionGroups.setupRead,
+  '/app/setup/products': permissionGroups.setupRead,
+  '/app/setup/users-roles': permissionGroups.usersAdmin,
 };
 
 const ModulePlaceholder: React.FC = () => {
@@ -41,12 +61,17 @@ const ModulePlaceholder: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { addToast } = useAppStore();
-  
+  const { t } = useTranslation();
+
   const pathParts = location.pathname.split('/').filter(Boolean);
   const moduleName = pathParts[pathParts.length - 1]?.replace(/-/g, ' ') || 'Module';
   const parentName = pathParts[pathParts.length - 2]?.replace(/-/g, ' ') || '';
 
-  const isReadOnly = user?.role === 'auditor';
+  const actionTarget =
+    PLACEHOLDER_NEW_ROUTES[moduleName.toLowerCase()] ||
+    (pathParts.length >= 2 ? `/app/${pathParts[pathParts.length - 2]}` : '/app/dashboard');
+  const canLaunchAction = hasAnyPermission(user, PLACEHOLDER_TARGET_PERMISSIONS[actionTarget]);
+  const isReadOnly = !canLaunchAction;
 
   const stationsQuery = useQuery({ queryKey: ['stations'], queryFn: stationRepo.list });
   const customersQuery = useQuery({ queryKey: ['customers'], queryFn: customerRepo.list });
@@ -55,24 +80,22 @@ const ModulePlaceholder: React.FC = () => {
   const isLoading = stationsQuery.isLoading || customersQuery.isLoading || salesQuery.isLoading;
 
   const handleNewEntry = () => {
-    const key = moduleName.toLowerCase();
-    const target = PLACEHOLDER_NEW_ROUTES[key] || (pathParts.length >= 2 ? `/app/${pathParts[pathParts.length - 2]}` : '/app/dashboard');
-    addToast(`Taking you to ${moduleName}...`, 'info');
-    navigate(target);
+    addToast(t('module.navigating', { name: moduleName }), 'info');
+    navigate(actionTarget);
   };
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
-      <PageHeader 
-        title={moduleName.charAt(0).toUpperCase() + moduleName.slice(1)} 
+      <PageHeader
+        title={moduleName.charAt(0).toUpperCase() + moduleName.slice(1)}
         description={`${parentName ? parentName.toUpperCase() + ' > ' : ''}Management and analysis for IFMS ${moduleName}.`}
         actions={
-          !isReadOnly && (
-            <button 
+          canLaunchAction && (
+            <button
               onClick={handleNewEntry}
               className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-primary/20 hover:opacity-90 transition-all flex items-center gap-2"
             >
-              <Plus size={14} /> New {moduleName}
+              <Plus size={14} /> {t('common.new', { name: moduleName })}
             </button>
           )
         }
@@ -80,7 +103,7 @@ const ModulePlaceholder: React.FC = () => {
 
       {isLoading ? (
         <div className="bg-card border border-border rounded-xl p-8">
-           <TableSkeleton />
+          <TableSkeleton />
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6">
@@ -90,30 +113,44 @@ const ModulePlaceholder: React.FC = () => {
             </div>
             <h2 className="text-2xl font-black tracking-tight mb-2">Enterprise Node Connected</h2>
             <p className="text-muted-foreground max-w-md text-sm font-medium">
-              The <strong>{moduleName}</strong> interface is successfully synchronized with the core data layer.
-              Currently indexing <strong>{parentName || 'global'}</strong> records.
+              The <strong>{moduleName}</strong> interface is successfully synchronized with the core
+              data layer. Currently indexing <strong>{parentName || 'global'}</strong> records.
             </p>
 
             <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-6 w-full max-w-3xl">
               <div className="bg-muted/30 p-6 rounded-[1.25rem] border border-border group hover:border-primary/30 transition-all">
-                 <p className="text-[10px] font-black text-muted-foreground uppercase mb-2 tracking-widest">Active Stations</p>
-                 <p className="text-3xl font-black group-hover:text-primary transition-colors">{stationsQuery.data?.length || 0}</p>
+                <p className="text-[10px] font-black text-muted-foreground uppercase mb-2 tracking-widest">
+                  Active Stations
+                </p>
+                <p className="text-3xl font-black group-hover:text-primary transition-colors">
+                  {stationsQuery.data?.length || 0}
+                </p>
               </div>
               <div className="bg-muted/30 p-6 rounded-[1.25rem] border border-border group hover:border-primary/30 transition-all">
-                 <p className="text-[10px] font-black text-muted-foreground uppercase mb-2 tracking-widest">Master Accounts</p>
-                 <p className="text-3xl font-black group-hover:text-primary transition-colors">{customersQuery.data?.length || 0}</p>
+                <p className="text-[10px] font-black text-muted-foreground uppercase mb-2 tracking-widest">
+                  Master Accounts
+                </p>
+                <p className="text-3xl font-black group-hover:text-primary transition-colors">
+                  {customersQuery.data?.length || 0}
+                </p>
               </div>
               <div className="bg-muted/30 p-6 rounded-[1.25rem] border border-border group hover:border-primary/30 transition-all">
-                 <p className="text-[10px] font-black text-muted-foreground uppercase mb-2 tracking-widest">Recent Sales</p>
-                 <p className="text-3xl font-black group-hover:text-primary transition-colors">{salesQuery.data?.length || 0}</p>
+                <p className="text-[10px] font-black text-muted-foreground uppercase mb-2 tracking-widest">
+                  Recent Sales
+                </p>
+                <p className="text-3xl font-black group-hover:text-primary transition-colors">
+                  {salesQuery.data?.length || 0}
+                </p>
               </div>
             </div>
 
             <div className="mt-12 p-4 border border-dashed border-border rounded-2xl w-full max-w-2xl bg-muted/10">
-               <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest flex items-center justify-center gap-2">
-                  <Lock size={12} className="text-primary/60" />
-                  {isReadOnly ? "Audit constraints applied. Modification tools are disabled." : "Full modification rights enabled for this session."}
-               </p>
+              <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest flex items-center justify-center gap-2">
+                <Lock size={12} className="text-primary/60" />
+                {isReadOnly
+                  ? 'Audit constraints applied. Modification tools are disabled.'
+                  : 'Full modification rights enabled for this session.'}
+              </p>
             </div>
           </div>
         </div>

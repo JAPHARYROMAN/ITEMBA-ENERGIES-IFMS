@@ -5,7 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Param,
+  Param, ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -23,7 +23,7 @@ import { BaseListController } from '../../common/base/base-list.controller';
 import { ListQueryDto } from '../../common/dto/list-query.dto';
 import type { ListResponse } from '../../common/interfaces/response-envelope';
 import { getListParams } from '../../common/helpers/list.helper';
-import { SuppliersService, type SupplierItem, type SuppliersListParams } from './suppliers.service';
+import { SuppliersService, type SupplierItem } from './suppliers.service';
 import { SupplierStatementService, type SupplierStatement } from './supplier-statement.service';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
@@ -44,7 +44,9 @@ export class SuppliersController extends BaseListController {
   @Permissions('payables:read')
   @ApiOperation({ summary: 'List suppliers' })
   @ApiResponse({ status: 200 })
-  async list(@Query() query: ListQueryDto & SuppliersListParams): Promise<ListResponse<SupplierItem>> {
+  async list(
+    @Query() query: ListQueryDto,
+  ): Promise<ListResponse<SupplierItem>> {
     const params = getListParams(query);
     const { data, total } = await this.suppliersService.findPage({
       page: query.page,
@@ -58,11 +60,13 @@ export class SuppliersController extends BaseListController {
 
   @Get(':id/statement')
   @Permissions('payables:read')
-  @ApiOperation({ summary: 'Get supplier statement (opening balance, invoices, payments, running balance)' })
+  @ApiOperation({
+    summary: 'Get supplier statement (opening balance, invoices, payments, running balance)',
+  })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   async getStatement(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Query('dateFrom') dateFrom: string,
     @Query('dateTo') dateTo: string,
   ): Promise<SupplierStatement> {
@@ -76,8 +80,11 @@ export class SuppliersController extends BaseListController {
   @ApiOperation({ summary: 'Get supplier by ID' })
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
-  async getById(@Param('id') id: string): Promise<SupplierItem> {
-    return this.suppliersService.findById(id);
+  async getById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<SupplierItem> {
+    return this.suppliersService.findById(id, companyId);
   }
 
   @Post()
@@ -91,7 +98,14 @@ export class SuppliersController extends BaseListController {
     @Req() req: Request,
   ): Promise<SupplierItem> {
     return this.suppliersService.create(
-      { companyId: dto.companyId, code: dto.code, name: dto.name, category: dto.category, rating: dto.rating, status: dto.status },
+      {
+        companyId: dto.companyId,
+        code: dto.code,
+        name: dto.name,
+        category: dto.category,
+        rating: dto.rating,
+        status: dto.status,
+      },
       { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] },
     );
   }
@@ -102,12 +116,16 @@ export class SuppliersController extends BaseListController {
   @ApiResponse({ status: 200 })
   @ApiResponse({ status: 404 })
   async update(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSupplierDto,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<SupplierItem> {
-    return this.suppliersService.update(id, dto, { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] });
+    return this.suppliersService.update(id, dto, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 
   @Delete(':id')
@@ -117,10 +135,14 @@ export class SuppliersController extends BaseListController {
   @ApiResponse({ status: 204 })
   @ApiResponse({ status: 404 })
   async delete(
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadUser,
     @Req() req: Request,
   ): Promise<void> {
-    await this.suppliersService.remove(id, { userId: user.sub, ip: req.ip, userAgent: req.headers['user-agent'] });
+    await this.suppliersService.remove(id, {
+      userId: user.sub,
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
   }
 }

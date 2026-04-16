@@ -11,6 +11,7 @@ import { ReportsService } from './reports.service';
 import { ReportsQueryDto } from './dto/reports-query.dto';
 import { ReportActionDto } from './dto/report-action.dto';
 import type { ReportScopeContext } from './reports.service';
+import { extractTenantScope } from '../../common/helpers/scope.helper';
 
 @ApiTags('reports')
 @Controller('reports')
@@ -193,15 +194,10 @@ export class ReportsController {
   }
 
   private parsePermissionScope(permissions: string[]): { companyId?: string; branchId?: string } {
-    const company = permissions
-      .map((p) => p.match(/^company:([0-9a-fA-F-]{36})$/)?.[1])
-      .find(Boolean);
-    const branch = permissions
-      .map((p) => p.match(/^branch:([0-9a-fA-F-]{36})$/)?.[1])
-      .find(Boolean);
+    const { companyIds, branchIds } = extractTenantScope(permissions);
     return {
-      companyId: company || undefined,
-      branchId: branch || undefined,
+      companyId: companyIds[0],
+      branchId: branchIds[0],
     };
   }
 }

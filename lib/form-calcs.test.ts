@@ -1,26 +1,10 @@
-
+import { describe, test, expect } from 'vitest';
 import { 
   computeMeterDelta, 
   computeExpectedRevenue, 
   computeExpectedCash, 
   computeVariance 
 } from './form-calcs';
-
-// Mock test runner style if vitest isn't globally available in the environment
-const describe = (name: string, fn: Function) => { console.log(`\nDESCRIBE: ${name}`); fn(); };
-const test = (name: string, fn: Function) => { 
-  try { 
-    fn(); 
-    console.log(`  [PASS] ${name}`); 
-  } catch (e) { 
-    console.error(`  [FAIL] ${name}:`, e); 
-  } 
-};
-const expect = (actual: any) => ({
-  toBe: (expected: any) => {
-    if (actual !== expected) throw new Error(`Expected ${expected} but got ${actual}`);
-  }
-});
 
 describe('Form Calculation Module', () => {
   test('computeMeterDelta calculates difference correctly', () => {

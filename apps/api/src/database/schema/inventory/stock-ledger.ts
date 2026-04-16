@@ -10,6 +10,8 @@ export const STOCK_LEDGER_MOVEMENT_GRN = 'grn';
 export const STOCK_LEDGER_MOVEMENT_TRANSFER_OUT = 'transfer_out';
 export const STOCK_LEDGER_MOVEMENT_TRANSFER_IN = 'transfer_in';
 export const STOCK_LEDGER_MOVEMENT_ADJUSTMENT = 'adjustment';
+export const STOCK_LEDGER_MOVEMENT_SALE = 'sale';
+export const STOCK_LEDGER_MOVEMENT_VOID_REVERSAL = 'void_reversal';
 
 export const stockLedger = pgTable(
   'stock_ledger',
@@ -35,5 +37,6 @@ export const stockLedger = pgTable(
     index('stock_ledger_company_branch_date_idx').on(t.companyId, t.branchId, t.movementDate),
     index('stock_ledger_tank_id_idx').on(t.tankId),
     index('stock_ledger_reference_idx').on(t.referenceType, t.referenceId),
+    index('stock_ledger_movement_ref_date_idx').on(t.movementType, t.referenceId, t.movementDate),
   ],
 );

@@ -61,6 +61,7 @@ jobs:
   migrate-staging:
     runs-on: ubuntu-latest
     needs: build-and-push
+    environment: staging
     steps:
       - name: Deploy repository update + run migrations on staging host
         uses: appleboy/ssh-action@v1.2.0
@@ -86,6 +87,7 @@ jobs:
   deploy-staging:
     runs-on: ubuntu-latest
     needs: [build-and-push, migrate-staging]
+    environment: staging
     steps:
       - name: Pull and restart staging services
         uses: appleboy/ssh-action@v1.2.0
@@ -106,6 +108,7 @@ jobs:
   smoke-tests:
     runs-on: ubuntu-latest
     needs: deploy-staging
+    environment: staging
     steps:
       - name: Checkout
         uses: actions/checkout@v4

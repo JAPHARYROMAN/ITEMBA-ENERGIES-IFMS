@@ -1,5 +1,5 @@
 /**
- * Reset admin password to Admin123!
+ * Reset admin password (uses ADMIN_SEED_EMAIL & ADMIN_SEED_PASSWORD from .env).
  * Run: npm run db:reset-admin (from apps/api)
  * Use when seed was skipped (DB already had GEC) or password doesn't work.
  */
@@ -19,8 +19,17 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-const ADMIN_EMAIL = 'admin@ifms.com';
-const ADMIN_PASSWORD = 'Admin123!';
+function requireEnv(name: string): string {
+  const val = process.env[name];
+  if (!val) {
+    console.error(`Missing ${name} in environment.`);
+    process.exit(1);
+  }
+  return val;
+}
+
+const ADMIN_EMAIL = requireEnv('ADMIN_SEED_EMAIL');
+const ADMIN_PASSWORD = requireEnv('ADMIN_SEED_PASSWORD');
 
 async function resetAdmin() {
   const pool = new Pool({ connectionString: DATABASE_URL });
@@ -32,14 +41,18 @@ async function resetAdmin() {
     .where(eq(users.email, ADMIN_EMAIL));
 
   if (!user) {
-    console.error(`No user found with email "${ADMIN_EMAIL}". Run db:seed on a fresh database first.`);
+    console.error(
+      `No user found with email "${ADMIN_EMAIL}". Run db:seed on a fresh database first.`,
+    );
     await pool.end();
     process.exit(1);
   }
 
   const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
   await db.update(users).set({ passwordHash, updatedAt: new Date() }).where(eq(users.id, user.id));
-  console.log(`Password reset for ${ADMIN_EMAIL}. You can now log in with: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
+  console.log(
+    `Password reset for ${ADMIN_EMAIL}. You can now log in with: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`,
+  );
   await pool.end();
 }
 

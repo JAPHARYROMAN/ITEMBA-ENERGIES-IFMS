@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
@@ -86,6 +87,30 @@ export class PaymentsService {
     return { data, total: countResult[0]?.count ?? 0 };
   }
 
+  async getById(id: string): Promise<PaymentItem & { allocations: { invoiceId: string; amount: string }[] }> {
+    const [row] = await this.db
+      .select({
+        id: payments.id,
+        companyId: payments.companyId,
+        branchId: payments.branchId,
+        customerId: payments.customerId,
+        paymentNumber: payments.paymentNumber,
+        amount: payments.amount,
+        method: payments.method,
+        paymentDate: payments.paymentDate,
+        referenceNo: payments.referenceNo,
+        createdAt: payments.createdAt,
+      })
+      .from(payments)
+      .where(and(eq(payments.id, id), isNull(payments.deletedAt)));
+    if (!row) throw new NotFoundException('Credit payment not found');
+    const allocations = await this.db
+      .select({ invoiceId: paymentAllocations.invoiceId, amount: paymentAllocations.amount })
+      .from(paymentAllocations)
+      .where(eq(paymentAllocations.paymentId, id));
+    return { ...row, allocations };
+  }
+
   async create(
     payload: {
       customerId: string;
@@ -97,16 +122,15 @@ export class PaymentsService {
     },
     ctx: AuditContext,
   ): Promise<PaymentItem> {
-    const [customer] = await this.db
+    const [customerBasic] = await this.db
       .select({
         id: customers.id,
         companyId: customers.companyId,
         branchId: customers.branchId,
-        balance: customers.balance,
       })
       .from(customers)
       .where(and(eq(customers.id, payload.customerId), isNull(customers.deletedAt)));
-    if (!customer) throw new NotFoundException('Customer not found');
+    if (!customerBasic) throw new NotFoundException('Customer not found');
 
     const paymentDate = payload.paymentDate ? new Date(payload.paymentDate) : new Date();
     const paymentNumber = `PAY-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -165,17 +189,25 @@ export class PaymentsService {
       }
     }
 
-    const currentBalance = Number(customer.balance || 0);
-    if (currentBalance < payload.amount) {
-      throw new BadRequestException(`Customer balance ${currentBalance} is less than payment amount ${payload.amount}`);
-    }
-
     const [inserted] = await this.db.transaction(async (tx) => {
+      // Lock the customer row to prevent concurrent balance modifications
+      const [lockedCustomer] = await tx
+        .select({ balance: customers.balance })
+        .from(customers)
+        .where(eq(customers.id, payload.customerId))
+        .for('update');
+      if (!lockedCustomer) throw new NotFoundException('Customer not found');
+
+      const currentBalance = Number(lockedCustomer.balance || 0);
+      if (currentBalance < payload.amount) {
+        throw new BadRequestException(`Customer balance ${currentBalance} is less than payment amount ${payload.amount}`);
+      }
+
       const [pay] = await tx
         .insert(payments)
         .values({
-          companyId: customer.companyId,
-          branchId: customer.branchId,
+          companyId: customerBasic.companyId,
+          branchId: customerBasic.branchId,
           customerId: payload.customerId,
           paymentNumber,
           amount: String(payload.amount.toFixed(2)),
@@ -197,7 +229,7 @@ export class PaymentsService {
           referenceNo: payments.referenceNo,
           createdAt: payments.createdAt,
         });
-      if (!pay) throw new Error('Failed to insert payment');
+      if (!pay) throw new InternalServerErrorException('Failed to insert payment');
 
       for (const a of allocationsToUse) {
         await tx.insert(paymentAllocations).values({
@@ -249,7 +281,95 @@ export class PaymentsService {
       return [pay];
     });
 
-    if (!inserted) throw new Error('Payment insert failed');
+    if (!inserted) throw new InternalServerErrorException('Payment insert failed');
     return inserted;
+  }
+
+  async voidPayment(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
+    const [payment] = await this.db
+      .select()
+      .from(payments)
+      .where(and(eq(payments.id, id), isNull(payments.deletedAt)));
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    const allocations = await this.db
+      .select({
+        invoiceId: paymentAllocations.invoiceId,
+        amount: paymentAllocations.amount,
+      })
+      .from(paymentAllocations)
+      .where(eq(paymentAllocations.paymentId, id));
+
+    const now = new Date();
+
+    await this.db.transaction(async (tx) => {
+      // Reverse each allocation: add the amount back to invoice balanceRemaining
+      for (const alloc of allocations) {
+        const [inv] = await tx
+          .select({
+            balanceRemaining: creditInvoices.balanceRemaining,
+            totalAmount: creditInvoices.totalAmount,
+          })
+          .from(creditInvoices)
+          .where(eq(creditInvoices.id, alloc.invoiceId));
+        if (inv) {
+          const newRemaining = Number(inv.balanceRemaining || 0) + Number(alloc.amount);
+          const total = Number(inv.totalAmount || 0);
+          const status = newRemaining >= total - 0.01 ? STATUS_UNPAID : STATUS_PARTIAL;
+          await tx
+            .update(creditInvoices)
+            .set({
+              balanceRemaining: String(Math.min(newRemaining, total).toFixed(2)),
+              status,
+              updatedAt: now,
+              ...(ctx.userId && { updatedBy: ctx.userId }),
+            })
+            .where(eq(creditInvoices.id, alloc.invoiceId));
+        }
+      }
+
+      // Restore customer balance
+      const [cust] = await tx
+        .select({ balance: customers.balance })
+        .from(customers)
+        .where(eq(customers.id, payment.customerId));
+      if (cust) {
+        const restoredBalance = (Number(cust.balance || 0) + Number(payment.amount)).toFixed(2);
+        await tx
+          .update(customers)
+          .set({
+            balance: restoredBalance,
+            updatedAt: now,
+            ...(ctx.userId && { updatedBy: ctx.userId }),
+          })
+          .where(eq(customers.id, payment.customerId));
+      }
+
+      // Soft-delete the payment
+      await tx
+        .update(payments)
+        .set({
+          deletedAt: now,
+          updatedAt: now,
+          ...(ctx.userId && { updatedBy: ctx.userId }),
+        })
+        .where(eq(payments.id, id));
+
+      await this.audit.log(
+        {
+          entity: 'payments',
+          entityId: id,
+          action: 'void',
+          before: payment as object,
+          after: { ...payment, deletedAt: now } as object,
+          userId: ctx.userId,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+        tx as NodePgDatabase<Schema>,
+      );
+    });
+
+    return { success: true };
   }
 }

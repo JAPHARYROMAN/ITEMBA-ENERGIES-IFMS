@@ -1,30 +1,45 @@
-
 import React from 'react';
 
-export type Role = 'manager' | 'cashier' | 'auditor';
+// Re-export shared types so existing imports from '@/types' keep working
+export type {
+  Role,
+  PermissionMatch,
+  FinancialMetric,
+  PaginatedResponse,
+  PaginationParams,
+  BaseEntity,
+  Product,
+  Tank,
+  Customer,
+  Delivery,
+  DeliveryItem,
+  AuditLogEntry,
+  ExportFormat,
+  ExportStatus,
+  ExportRecord,
+  ApprovalStatus,
+  ApprovalRequest,
+  ApprovalStep,
+  NotificationSeverity,
+  NotificationType,
+  Notification,
+} from '@shared/types';
 
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: Role;
-  avatar?: string;
-}
+import type { Role, PermissionMatch } from '@shared/types';
+import type { UserProfile } from '@shared/types';
 
-export interface FinancialMetric {
-  label: string;
-  value: string;
-  change: number;
-  trend: 'up' | 'down' | 'neutral';
-  color: string;
-}
+// Frontend-specific alias — keeps existing consumer code unchanged
+export type User = UserProfile;
 
+// Frontend-only types (depend on React)
 export interface SidebarItem {
   name: string;
   icon: React.ElementType;
   path: string;
   category?: 'Operations' | 'Finance' | 'Reports' | 'Setup' | 'Governance';
   roles?: Role[];
+  permissions?: string[];
+  permissionMatch?: PermissionMatch;
   children?: SidebarItem[];
   badge?: string;
 }
@@ -39,6 +54,8 @@ export interface AppState {
 export interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
+  isAuthReady: boolean;
+  hydrateAuth: () => Promise<void>;
   loginWithCredentials?: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }

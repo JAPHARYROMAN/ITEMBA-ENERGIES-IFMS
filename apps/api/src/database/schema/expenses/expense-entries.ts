@@ -2,6 +2,7 @@ import { index, numeric, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/p
 import { auditColumns } from '../shared';
 import { companies } from '../core/companies';
 import { branches } from '../core/branches';
+import { expenseCategories } from './expense-categories';
 
 export const expenseEntries = pgTable(
   'expense_entries',
@@ -14,7 +15,8 @@ export const expenseEntries = pgTable(
       .notNull()
       .references(() => branches.id, { onDelete: 'restrict' }),
     entryNumber: varchar('entry_number', { length: 64 }).notNull(),
-    categoryId: uuid('category_id'),
+    categoryId: uuid('category_id')
+      .references(() => expenseCategories.id, { onDelete: 'set null' }),
     category: varchar('category', { length: 64 }).notNull(),
     amount: numeric('amount', { precision: 18, scale: 2 }).notNull(),
     vendor: varchar('vendor', { length: 255 }).notNull(),

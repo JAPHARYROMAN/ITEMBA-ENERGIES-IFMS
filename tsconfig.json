@@ -12,7 +12,10 @@
     "moduleDetection": "force",
     "allowJs": true,
     "jsx": "react-jsx",
-    "paths": { "@/*": ["./*"] },
+    "paths": {
+      "@/*": ["./*"],
+      "@shared/types": ["./shared/types/index.ts"]
+    },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
