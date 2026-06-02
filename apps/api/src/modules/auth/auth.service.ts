@@ -28,6 +28,7 @@ import {
 import { stations } from "../../database/schema/core/stations";
 import { branches } from "../../database/schema/core/branches";
 import { EmailTransport } from "../notifications/transports/email.transport";
+import { invalidatePermissionCache } from "./strategies/permission-cache";
 
 type Schema = typeof schema;
 
@@ -613,6 +614,8 @@ export class AuthService {
           ),
         );
     }
+    // Drop any cached permissions so the status change takes effect immediately
+    invalidatePermissionCache(userId);
   }
 
   /** Assign role to user (admin) */
@@ -627,6 +630,8 @@ export class AuthService {
       .insert(userRoles)
       .values({ userId, roleId: role.id })
       .onConflictDoNothing();
+    // Drop cached permissions so the new role takes effect immediately
+    invalidatePermissionCache(userId);
   }
 
   /** Remove role from user (admin) */
@@ -639,6 +644,8 @@ export class AuthService {
     await this.db
       .delete(userRoles)
       .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, role.id)));
+    // Drop cached permissions so the revocation takes effect immediately
+    invalidatePermissionCache(userId);
   }
 
   /** List all roles */

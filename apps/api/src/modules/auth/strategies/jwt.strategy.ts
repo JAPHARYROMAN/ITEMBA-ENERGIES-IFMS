@@ -4,25 +4,20 @@ import { PassportStrategy } from "@nestjs/passport";
 import { ExtractJwt, Strategy } from "passport-jwt";
 import type { JwtPayloadUser } from "../decorators/current-user.decorator";
 import { AuthService } from "../auth.service";
+import {
+  getCachedPermission,
+  setCachedPermission,
+  invalidatePermissionCache,
+} from "./permission-cache";
+
+// Re-exported for backward compatibility with existing importers.
+export { invalidatePermissionCache };
 
 export interface JwtPayload {
   sub: string;
   email: string;
   type: "access";
 }
-
-/**
- * In-memory TTL cache for user permissions to avoid 3+ DB queries per request.
- * Entries expire after TTL_MS. Keyed by userId.
- */
-interface CachedPermission {
-  data: JwtPayloadUser;
-  expiresAt: number;
-}
-
-const PERMISSION_CACHE_TTL_MS = 30_000; // 30 seconds
-const PERMISSION_CACHE_MAX_SIZE = 500;
-const permissionCache = new Map<string, CachedPermission>();
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
@@ -41,10 +36,9 @@ export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
     if (payload.type !== "access")
       throw new UnauthorizedException("Invalid token type");
 
-    const now = Date.now();
-    const cached = permissionCache.get(payload.sub);
-    if (cached && cached.expiresAt > now) {
-      return cached.data;
+    const cached = getCachedPermission(payload.sub);
+    if (cached) {
+      return cached;
     }
 
     const userWithPerms = await this.authService.getUserWithPermissions(
@@ -58,25 +52,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, "jwt") {
       permissions: userWithPerms.permissions,
     };
 
-    // Evict oldest entries if cache grows too large
-    if (permissionCache.size >= PERMISSION_CACHE_MAX_SIZE) {
-      const firstKey = permissionCache.keys().next().value;
-      if (firstKey) permissionCache.delete(firstKey);
-    }
-    permissionCache.set(payload.sub, {
-      data: result,
-      expiresAt: now + PERMISSION_CACHE_TTL_MS,
-    });
+    setCachedPermission(payload.sub, result);
 
     return result;
-  }
-}
-
-/** Exported for use after role/permission changes to force re-fetch */
-export function invalidatePermissionCache(userId?: string): void {
-  if (userId) {
-    permissionCache.delete(userId);
-  } else {
-    permissionCache.clear();
   }
 }

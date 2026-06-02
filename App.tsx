@@ -724,7 +724,7 @@ function LoginPage() {
                   value={field.value}
                   onChange={field.onChange}
                   required
-                  minLength={1}
+                  minLength={8}
                   placeholder="Enter your password"
                   autoComplete="current-password"
                   error={fieldState.error?.message}

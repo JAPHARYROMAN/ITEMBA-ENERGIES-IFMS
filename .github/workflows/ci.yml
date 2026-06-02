@@ -180,10 +180,9 @@ jobs:
         run: npm ci
         working-directory: apps/api
 
-      - name: Audit API dependencies (non-blocking pending Nest 11 upgrade)
+      - name: Audit API dependencies
         run: npm audit --audit-level=high
         working-directory: apps/api
-        continue-on-error: true
 
       - name: Summarize API audit status
         if: always()
