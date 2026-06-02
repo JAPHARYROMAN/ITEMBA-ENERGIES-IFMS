@@ -64,6 +64,10 @@ jobs:
 
       - name: Run frontend tests
         run: npx vitest run
+        env:
+          # Unit tests don't hit a real backend; demo mode satisfies the
+          # frontend env schema so vite.config.ts loads without VITE_API_URL.
+          VITE_DEMO_MODE: 'true'
 
       - name: Install API deps
         run: npm ci
