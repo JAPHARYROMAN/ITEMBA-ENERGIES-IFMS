@@ -513,7 +513,7 @@ function ExpensesPage() {
 
 const loginSchema = z.object({
   email: z.string().trim().email("Enter a valid corporate email address."),
-  password: z.string().min(8, "Password must be at least 8 characters."),
+  password: z.string().min(1, "Password is required."),
 });
 
 const signupSchema = z
@@ -701,7 +701,7 @@ function LoginPage() {
                   value={field.value}
                   onChange={field.onChange}
                   required
-                  minLength={8}
+                  minLength={1}
                   placeholder="Enter your password"
                   autoComplete="current-password"
                   error={fieldState.error?.message}
