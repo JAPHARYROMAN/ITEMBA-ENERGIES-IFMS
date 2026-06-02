@@ -49,10 +49,9 @@ ALTER TABLE grn_allocations ADD CONSTRAINT chk_grn_alloc_quantity CHECK (quantit
 -- Setup
 ALTER TABLE products ADD CONSTRAINT chk_products_price_per_unit CHECK (price_per_unit >= 0);
 ALTER TABLE tanks ADD CONSTRAINT chk_tanks_capacity CHECK (capacity > 0);
-ALTER TABLE tanks ADD CONSTRAINT chk_tanks_current_level CHECK (current_level >= 0);
 
 -- Inventory
-ALTER TABLE stock_ledger ADD CONSTRAINT chk_stock_ledger_quantity CHECK (quantity > 0);
+ALTER TABLE stock_ledger ADD CONSTRAINT chk_stock_ledger_quantity CHECK (quantity <> 0) NOT VALID;
 ALTER TABLE tank_dips ADD CONSTRAINT chk_tank_dips_volume CHECK (volume >= 0);
 
 -- Transfers

@@ -28,11 +28,11 @@ export function TankToTankTransferForm({ onSuccess, onCancel }: { onSuccess: () 
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transfers'] });
-      addToast({ type: 'success', message: 'Tank-to-tank transfer completed' });
+      addToast('Tank-to-tank transfer completed', 'success');
       onSuccess();
     },
     onError: (err: any) => {
-      addToast({ type: 'error', message: err?.message ?? 'Transfer failed' });
+      addToast(err?.message ?? 'Transfer failed', 'error');
     },
   });
 

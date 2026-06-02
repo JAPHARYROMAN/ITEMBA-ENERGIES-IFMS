@@ -1,5 +1,7 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
 import { ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { Public } from '../auth/decorators/public.decorator';
 import { SystemService } from './system.service';
 
 @ApiTags('System')
@@ -8,15 +10,21 @@ export class SystemController {
   constructor(private readonly systemService: SystemService) {}
 
   @Get('health/live')
+  @Public()
   @ApiExcludeEndpoint()
   getLiveness() {
     return this.systemService.getLiveness();
   }
 
   @Get('health/ready')
+  @Public()
   @ApiExcludeEndpoint()
-  getReadiness() {
-    return this.systemService.getReadiness();
+  async getReadiness(@Res({ passthrough: true }) res: Response) {
+    const readiness = await this.systemService.getReadiness();
+    if (readiness.status !== 'ok') {
+      res.status(HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    return readiness;
   }
 
   @Get('ops/metrics')

@@ -8,6 +8,8 @@ import { PermissionsGuard } from '../src/modules/auth/guards/permissions.guard';
 
 describe('Reports Overview Endpoint (e2e)', () => {
   let app: INestApplication;
+  const companyId = '11111111-1111-1111-1111-111111111111';
+  const branchId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
   const reportsServiceMock = {
     getOverview: jest.fn(),
@@ -27,7 +29,11 @@ describe('Reports Overview Endpoint (e2e)', () => {
       .useValue({
         canActivate: (ctx: any) => {
           const req = ctx.switchToHttp().getRequest();
-          req.user = { sub: 'auditor-1', email: 'auditor@ifms.com', permissions: ['reports:read'] };
+          req.user = {
+            sub: 'auditor-1',
+            email: 'auditor@ifms.com',
+            permissions: ['reports:read', `company:${companyId}`, `branch:${branchId}`],
+          };
           return true;
         },
       })
@@ -60,5 +66,17 @@ describe('Reports Overview Endpoint (e2e)', () => {
     expect(res.body.kpis).toBeDefined();
     expect(Array.isArray(res.body.salesTrend)).toBe(true);
     expect(Array.isArray(res.body.paymentMix)).toBe(true);
+    expect(reportsServiceMock.getOverview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dateFrom: '2026-02-01',
+        dateTo: '2026-02-28',
+      }),
+      expect.objectContaining({
+        scope: expect.objectContaining({
+          companyIds: [companyId],
+          branchIds: [branchId],
+        }),
+      }),
+    );
   });
 });

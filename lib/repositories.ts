@@ -68,6 +68,11 @@ let cachedDefaultContext: DefaultContext | null = null;
 let cachedDefaultStationId: string | null = null;
 const MAX_LIST_PAGE_SIZE = 100;
 
+export function resetRepositoryCaches(): void {
+  cachedDefaultContext = null;
+  cachedDefaultStationId = null;
+}
+
 async function listAll<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T[]> {
   const requestedPageSize = Number(params?.pageSize ?? MAX_LIST_PAGE_SIZE);
   const safePageSize = Number.isFinite(requestedPageSize) && requestedPageSize > 0

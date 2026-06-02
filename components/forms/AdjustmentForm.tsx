@@ -30,11 +30,11 @@ export function AdjustmentForm({ onSuccess, onCancel }: { onSuccess: () => void;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['adjustments'] });
-      addToast({ type: 'success', message: 'Adjustment created' });
+      addToast('Adjustment created', 'success');
       onSuccess();
     },
     onError: (err: any) => {
-      addToast({ type: 'error', message: err?.message ?? 'Failed to create adjustment' });
+      addToast(err?.message ?? 'Failed to create adjustment', 'error');
     },
   });
 

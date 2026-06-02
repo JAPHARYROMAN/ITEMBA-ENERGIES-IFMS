@@ -47,6 +47,15 @@ interface AuditContext {
   userAgent?: string;
 }
 
+interface LockedTankRow {
+  [key: string]: unknown;
+  id: string;
+  branchId: string;
+  productId: string | null;
+  capacity: string;
+  currentLevel: string;
+}
+
 @Injectable()
 export class AdjustmentsService {
   constructor(
@@ -123,7 +132,7 @@ export class AdjustmentsService {
       .where(and(eq(stations.id, branch.stationId), isNull(stations.deletedAt)));
     if (!station) throw new NotFoundException('Station not found');
 
-    const [tankRow] = await this.db
+    const [validatedTank] = await this.db
       .select({
         id: tanks.id,
         branchId: tanks.branchId,
@@ -133,19 +142,9 @@ export class AdjustmentsService {
       })
       .from(tanks)
       .where(and(eq(tanks.id, dto.tankId), isNull(tanks.deletedAt)));
-    if (!tankRow) throw new NotFoundException('Tank not found');
-    if (tankRow.branchId !== dto.branchId) {
+    if (!validatedTank) throw new NotFoundException('Tank not found');
+    if (validatedTank.branchId !== dto.branchId) {
       throw new BadRequestException('Tank does not belong to the specified branch');
-    }
-
-    const current = Number(tankRow.currentLevel || 0);
-    const capacity = Number(tankRow.capacity || 0);
-    const newLevel = current + dto.volumeDelta;
-    if (newLevel < 0) {
-      throw new BadRequestException(`Adjustment would result in negative stock: current ${current}, delta ${dto.volumeDelta}`);
-    }
-    if (newLevel > capacity) {
-      throw new BadRequestException(`Adjustment would exceed tank capacity: max ${capacity}, would be ${newLevel}`);
     }
 
     const adjustmentDate = dto.adjustmentDate ? new Date(dto.adjustmentDate) : new Date();
@@ -157,7 +156,7 @@ export class AdjustmentsService {
         companyId: station.companyId,
         branchId: dto.branchId,
         entityType: 'stock_adjustment',
-        entityId: tankRow.id,
+        entityId: validatedTank.id,
         actionType: 'approve',
         amount: Math.abs(dto.volumeDelta),
         reason: dto.reason,
@@ -220,6 +219,39 @@ export class AdjustmentsService {
 
     // Below threshold (or governance disabled): execute immediately
     const [inserted] = await this.db.transaction(async (tx) => {
+      const [tankRow] = (
+        await tx.execute<LockedTankRow>(sql`
+          SELECT
+            id,
+            branch_id AS "branchId",
+            product_id AS "productId",
+            capacity,
+            current_level AS "currentLevel"
+          FROM tanks
+          WHERE id = ${dto.tankId}
+            AND deleted_at IS NULL
+          FOR UPDATE
+        `)
+      ).rows;
+      if (!tankRow) throw new NotFoundException('Tank not found');
+      if (tankRow.branchId !== dto.branchId) {
+        throw new BadRequestException('Tank does not belong to the specified branch');
+      }
+
+      const current = Number(tankRow.currentLevel || 0);
+      const capacity = Number(tankRow.capacity || 0);
+      const newLevel = current + dto.volumeDelta;
+      if (newLevel < 0) {
+        throw new BadRequestException(
+          `Adjustment would result in negative stock: current ${current}, delta ${dto.volumeDelta}`,
+        );
+      }
+      if (newLevel > capacity) {
+        throw new BadRequestException(
+          `Adjustment would exceed tank capacity: max ${capacity}, would be ${newLevel}`,
+        );
+      }
+
       const [adj] = await tx
         .insert(adjustments)
         .values({
@@ -252,7 +284,7 @@ export class AdjustmentsService {
       await tx
         .update(tanks)
         .set({
-          currentLevel: String(newLevel.toFixed(3)),
+          currentLevel: sql`(${tanks.currentLevel} + ${volumeDeltaStr}::numeric)`,
           updatedAt: adjustmentDate,
           updatedBy: ctx.userId,
         })

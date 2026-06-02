@@ -81,7 +81,8 @@ The verify endpoint supports:
 Rate limited and returns safe metadata only.
 
 ## Storage and Integrity
-- Storage path: `storage/exports/<exportId>.<ext>`
+- Storage path: `storage/exports/<exportId>.<ext>` relative to the API runtime directory (normally `apps/api/storage/exports/...` locally)
+- Runtime export files under `apps/api/storage/` are ignored and must not be committed.
 - SHA-256 is calculated after render and persisted in `exports.sha256_hash`
 - `verification_token` is generated per export
 - Export expiry is controlled via `EXPORT_EXPIRES_HOURS`

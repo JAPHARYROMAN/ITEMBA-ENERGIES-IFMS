@@ -1,7 +1,13 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import { ExpensesService } from './expenses.service';
+import { ExpensesService, requiresGovernanceWorkflowDecision } from './expenses.service';
 
 describe('ExpensesService governance integration', () => {
+  it('blocks direct decisions for entries with an active governance workflow', () => {
+    expect(requiresGovernanceWorkflowDecision('pending_approval', false)).toBe(true);
+    expect(requiresGovernanceWorkflowDecision('submitted', true)).toBe(true);
+    expect(requiresGovernanceWorkflowDecision('submitted', false)).toBe(false);
+  });
+
   it('submitExpenseEntry sets pending_approval when governance request is created', async () => {
     const before = {
       id: 'exp-1',

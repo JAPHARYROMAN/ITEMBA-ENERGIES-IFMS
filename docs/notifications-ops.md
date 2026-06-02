@@ -206,7 +206,7 @@ curl -I -N -H "Connection: Upgrade" \
   -H "Upgrade: websocket" \
   -H "Sec-WebSocket-Key: x3JJHMbDL1EzLkh9GBhXDw==" \
   -H "Sec-WebSocket-Version: 13" \
-  ws://localhost:3000/realtime
+  ws://localhost:3001/realtime
 ```
 
 **Resolution:**
@@ -371,13 +371,13 @@ pg_dump -h localhost -U ifms -d ifms_db \
 ### Local Development Setup
 ```bash
 # Start notification services
-npm run dev:notifications
+npm run start:dev
 
 # Test WebSocket connections
 # Use browser dev tools or WebSocket test clients
 
 # Monitor metrics
-curl http://localhost:3000/api/notifications/metrics
+curl http://localhost:3001/api/notifications/metrics
 ```
 
 ### Testing Procedures

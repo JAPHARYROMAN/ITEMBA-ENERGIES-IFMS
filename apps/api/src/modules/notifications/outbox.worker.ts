@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit, BadRequestException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Inject } from "@nestjs/common";
-import { and, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { DRIZZLE } from "../../database/database.module";
 import type * as schema from "../../database/schema";
@@ -141,7 +141,7 @@ export class OutboxWorker implements OnModuleInit {
       })
       .where(
         and(
-          sql`${notificationOutbox.id} = ANY(${jobIds})`,
+          inArray(notificationOutbox.id, jobIds),
           isNull(notificationOutbox.deletedAt),
           isNull(notificationOutbox.lockedAt), // Ensure not already locked
         ),

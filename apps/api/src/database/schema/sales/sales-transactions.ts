@@ -26,7 +26,7 @@ export const salesTransactions = pgTable(
     discountReason: varchar('discount_reason', { length: 512 }),
     paymentType: varchar('payment_type', { length: 32 }),
     shiftId: uuid('shift_id').references(() => shifts.id, { onDelete: 'set null' }),
-    status: varchar('status', { length: 20 }).notNull().default(SALE_STATUS_COMPLETED),
+    status: varchar('status', { length: 32 }).notNull().default(SALE_STATUS_COMPLETED),
     voidedAt: timestamp('voided_at', { withTimezone: true }),
     voidedBy: uuid('voided_by').references(() => users.id, { onDelete: 'set null' }),
     voidReason: varchar('void_reason', { length: 512 }),

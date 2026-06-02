@@ -22,6 +22,8 @@ export interface ExportScope {
   permissions: string[];
   companyId?: string;
   branchId?: string;
+  companyIds: string[];
+  branchIds: string[];
 }
 
 export interface ExportAuditContext {

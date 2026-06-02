@@ -30,11 +30,11 @@ export function ReconciliationForm({ onSuccess, onCancel }: { onSuccess: () => v
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['reconciliations'] });
-      addToast({ type: 'success', message: 'Reconciliation created' });
+      addToast('Reconciliation created', 'success');
       onSuccess();
     },
     onError: (err: any) => {
-      addToast({ type: 'error', message: err?.message ?? 'Failed to create reconciliation' });
+      addToast(err?.message ?? 'Failed to create reconciliation', 'error');
     },
   });
 

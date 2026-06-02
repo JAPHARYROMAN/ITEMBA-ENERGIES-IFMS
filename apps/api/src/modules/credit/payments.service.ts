@@ -47,6 +47,48 @@ const STATUS_UNPAID = 'unpaid';
 const STATUS_PAID = 'paid';
 const STATUS_PARTIAL = 'partial';
 
+export interface PaymentAllocationInput {
+  invoiceId: string;
+  amount: number;
+}
+
+function toCurrencyCents(amount: number, label: string): number {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new BadRequestException(`${label} must be greater than zero`);
+  }
+  return Math.round(amount * 100);
+}
+
+function fromCurrencyCents(cents: number): number {
+  return cents / 100;
+}
+
+export function aggregatePaymentAllocations(
+  allocations: PaymentAllocationInput[],
+  paymentAmount: number,
+): PaymentAllocationInput[] {
+  const paymentCents = toCurrencyCents(paymentAmount, 'Payment amount');
+  const centsByInvoice = new Map<string, number>();
+
+  for (const allocation of allocations) {
+    if (!allocation.invoiceId) throw new BadRequestException('Allocation invoiceId is required');
+    const cents = toCurrencyCents(allocation.amount, `Allocation for invoice ${allocation.invoiceId}`);
+    centsByInvoice.set(allocation.invoiceId, (centsByInvoice.get(allocation.invoiceId) ?? 0) + cents);
+  }
+
+  const totalCents = [...centsByInvoice.values()].reduce((sum, cents) => sum + cents, 0);
+  if (totalCents !== paymentCents) {
+    throw new BadRequestException(
+      `Allocations sum ${fromCurrencyCents(totalCents).toFixed(2)} must equal payment amount ${fromCurrencyCents(paymentCents).toFixed(2)}`,
+    );
+  }
+
+  return [...centsByInvoice.entries()].map(([invoiceId, cents]) => ({
+    invoiceId,
+    amount: fromCurrencyCents(cents),
+  }));
+}
+
 @Injectable()
 export class PaymentsService {
   constructor(
@@ -135,59 +177,10 @@ export class PaymentsService {
     const paymentDate = payload.paymentDate ? new Date(payload.paymentDate) : new Date();
     const paymentNumber = `PAY-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 
-    let allocationsToUse: { invoiceId: string; amount: number }[];
-    if (payload.allocations?.length) {
-      const sum = payload.allocations.reduce((s, a) => s + a.amount, 0);
-      if (Math.abs(sum - payload.amount) > 0.01) {
-        throw new BadRequestException(`Allocations sum ${sum} must equal payment amount ${payload.amount}`);
-      }
-      allocationsToUse = payload.allocations;
-      const invs = await this.db
-        .select({ id: creditInvoices.id, customerId: creditInvoices.customerId, balanceRemaining: creditInvoices.balanceRemaining })
-        .from(creditInvoices)
-        .where(and(eq(creditInvoices.customerId, payload.customerId), isNull(creditInvoices.deletedAt)));
-      const invMap = new Map(invs.map((i) => [i.id, i]));
-      for (const a of allocationsToUse) {
-        const inv = invMap.get(a.invoiceId);
-        if (!inv) throw new BadRequestException(`Invoice ${a.invoiceId} not found or not for this customer`);
-        const remaining = Number(inv.balanceRemaining || 0);
-        if (a.amount > remaining) {
-          throw new BadRequestException(`Allocation ${a.amount} exceeds invoice balance ${remaining}`);
-        }
-      }
-    } else {
-      const unpaid = await this.db
-        .select({
-          id: creditInvoices.id,
-          balanceRemaining: creditInvoices.balanceRemaining,
-        })
-        .from(creditInvoices)
-        .where(and(
-          eq(creditInvoices.customerId, payload.customerId),
-          isNull(creditInvoices.deletedAt),
-          sql`${creditInvoices.balanceRemaining} > 0`,
-        ))
-        .orderBy(asc(creditInvoices.dueDate), asc(creditInvoices.invoiceDate));
-      let remaining = payload.amount;
-      allocationsToUse = [];
-      for (const inv of unpaid) {
-        if (remaining <= 0) break;
-        const bal = Number(inv.balanceRemaining || 0);
-        const alloc = Math.min(remaining, bal);
-        if (alloc > 0) {
-          allocationsToUse.push({ invoiceId: inv.id, amount: alloc });
-          remaining -= alloc;
-        }
-      }
-      if (allocationsToUse.length === 0) {
-        throw new BadRequestException('Customer has no outstanding invoices to allocate against');
-      }
-      if (remaining > 0.01) {
-        throw new BadRequestException(
-          `Payment amount ${payload.amount} exceeds total outstanding; unallocated ${remaining}. Provide explicit allocations to overpay specific invoices.`,
-        );
-      }
-    }
+    toCurrencyCents(payload.amount, 'Payment amount');
+    const explicitAllocations = payload.allocations?.length
+      ? aggregatePaymentAllocations(payload.allocations, payload.amount)
+      : null;
 
     const [inserted] = await this.db.transaction(async (tx) => {
       // Lock the customer row to prevent concurrent balance modifications
@@ -202,6 +195,22 @@ export class PaymentsService {
       if (currentBalance < payload.amount) {
         throw new BadRequestException(`Customer balance ${currentBalance} is less than payment amount ${payload.amount}`);
       }
+
+      const allocationsToUse = explicitAllocations
+        ? await this.validateExplicitAllocations(
+            explicitAllocations,
+            payload.customerId,
+            customerBasic.companyId,
+            customerBasic.branchId,
+            tx as NodePgDatabase<Schema>,
+          )
+        : await this.buildAutoAllocations(
+            payload.customerId,
+            payload.amount,
+            customerBasic.companyId,
+            customerBasic.branchId,
+            tx as NodePgDatabase<Schema>,
+          );
 
       const [pay] = await tx
         .insert(payments)
@@ -273,6 +282,7 @@ export class PaymentsService {
           action: 'create',
           after: pay as object,
           userId: ctx.userId,
+          companyId: pay.companyId,
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         },
@@ -285,24 +295,109 @@ export class PaymentsService {
     return inserted;
   }
 
-  async voidPayment(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
-    const [payment] = await this.db
-      .select()
-      .from(payments)
-      .where(and(eq(payments.id, id), isNull(payments.deletedAt)));
-    if (!payment) throw new NotFoundException('Payment not found');
-
-    const allocations = await this.db
+  private async validateExplicitAllocations(
+    allocations: PaymentAllocationInput[],
+    customerId: string,
+    companyId: string,
+    branchId: string,
+    tx: NodePgDatabase<Schema>,
+  ): Promise<PaymentAllocationInput[]> {
+    const invs = await tx
       .select({
-        invoiceId: paymentAllocations.invoiceId,
-        amount: paymentAllocations.amount,
+        id: creditInvoices.id,
+        balanceRemaining: creditInvoices.balanceRemaining,
       })
-      .from(paymentAllocations)
-      .where(eq(paymentAllocations.paymentId, id));
+      .from(creditInvoices)
+      .where(
+        and(
+          eq(creditInvoices.customerId, customerId),
+          eq(creditInvoices.companyId, companyId),
+          eq(creditInvoices.branchId, branchId),
+          isNull(creditInvoices.deletedAt),
+        ),
+      )
+      .for('update');
+    const invMap = new Map(invs.map((i) => [i.id, i]));
 
-    const now = new Date();
+    for (const allocation of allocations) {
+      const inv = invMap.get(allocation.invoiceId);
+      if (!inv) throw new BadRequestException(`Invoice ${allocation.invoiceId} not found or not for this customer`);
+      const remaining = Number(inv.balanceRemaining || 0);
+      if (allocation.amount > remaining + 0.001) {
+        throw new BadRequestException(`Allocation ${allocation.amount.toFixed(2)} exceeds invoice balance ${remaining.toFixed(2)}`);
+      }
+    }
 
+    return allocations;
+  }
+
+  private async buildAutoAllocations(
+    customerId: string,
+    amount: number,
+    companyId: string,
+    branchId: string,
+    tx: NodePgDatabase<Schema>,
+  ): Promise<PaymentAllocationInput[]> {
+    const unpaid = await tx
+      .select({
+        id: creditInvoices.id,
+        balanceRemaining: creditInvoices.balanceRemaining,
+      })
+      .from(creditInvoices)
+      .where(
+        and(
+          eq(creditInvoices.customerId, customerId),
+          eq(creditInvoices.companyId, companyId),
+          eq(creditInvoices.branchId, branchId),
+          isNull(creditInvoices.deletedAt),
+          sql`${creditInvoices.balanceRemaining} > 0`,
+        ),
+      )
+      .orderBy(asc(creditInvoices.dueDate), asc(creditInvoices.invoiceDate))
+      .for('update');
+
+    let remainingCents = toCurrencyCents(amount, 'Payment amount');
+    const allocations: PaymentAllocationInput[] = [];
+    for (const inv of unpaid) {
+      if (remainingCents <= 0) break;
+      const balanceCents = Math.max(0, toCurrencyCents(Number(inv.balanceRemaining || 0), `Invoice ${inv.id} balance`));
+      const allocationCents = Math.min(remainingCents, balanceCents);
+      if (allocationCents > 0) {
+        allocations.push({ invoiceId: inv.id, amount: fromCurrencyCents(allocationCents) });
+        remainingCents -= allocationCents;
+      }
+    }
+    if (allocations.length === 0) {
+      throw new BadRequestException('Customer has no outstanding invoices to allocate against');
+    }
+    if (remainingCents > 0) {
+      throw new BadRequestException(
+        `Payment amount ${amount.toFixed(2)} exceeds total outstanding; unallocated ${fromCurrencyCents(remainingCents).toFixed(2)}.`,
+      );
+    }
+    return allocations;
+  }
+
+  async voidPayment(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
     await this.db.transaction(async (tx) => {
+      const [payment] = await tx
+        .select()
+        .from(payments)
+        .where(eq(payments.id, id))
+        .for('update');
+      if (!payment) throw new NotFoundException('Payment not found');
+      if (payment.deletedAt) return;
+
+      const allocations = await tx
+        .select({
+          invoiceId: paymentAllocations.invoiceId,
+          amount: paymentAllocations.amount,
+        })
+        .from(paymentAllocations)
+        .where(eq(paymentAllocations.paymentId, id));
+
+      const now = new Date();
+
       // Reverse each allocation: add the amount back to invoice balanceRemaining
       for (const alloc of allocations) {
         const [inv] = await tx
@@ -311,7 +406,8 @@ export class PaymentsService {
             totalAmount: creditInvoices.totalAmount,
           })
           .from(creditInvoices)
-          .where(eq(creditInvoices.id, alloc.invoiceId));
+          .where(eq(creditInvoices.id, alloc.invoiceId))
+          .for('update');
         if (inv) {
           const newRemaining = Number(inv.balanceRemaining || 0) + Number(alloc.amount);
           const total = Number(inv.totalAmount || 0);
@@ -332,7 +428,8 @@ export class PaymentsService {
       const [cust] = await tx
         .select({ balance: customers.balance })
         .from(customers)
-        .where(eq(customers.id, payment.customerId));
+        .where(eq(customers.id, payment.customerId))
+        .for('update');
       if (cust) {
         const restoredBalance = (Number(cust.balance || 0) + Number(payment.amount)).toFixed(2);
         await tx
@@ -363,6 +460,7 @@ export class PaymentsService {
           before: payment as object,
           after: { ...payment, deletedAt: now } as object,
           userId: ctx.userId,
+          companyId: payment.companyId,
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         },

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import {
   HashRouter,
   Routes,
@@ -11,7 +11,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -59,7 +59,7 @@ import PayablesAgingPage from "./components/pages/PayablesAgingPage";
 import SalesTransactionsPage from "./components/pages/SalesTransactionsPage";
 import CreditAgingPage from "./components/pages/CreditAgingPage";
 import ExpenseCategoriesPage from "./components/pages/ExpenseCategoriesPage";
-import { matchesPermissionRequirement, useAppStore, useAuthStore } from "./store";
+import { matchesPermissionRequirement, useAppStore, useAuthStore, useReportsStore } from "./store";
 import {
   shiftRepo,
   saleRepo,
@@ -69,6 +69,7 @@ import {
   invoiceRepo,
   paymentRepo,
   pettyCashRepo,
+  resetRepositoryCaches,
 } from "./lib/repositories";
 import { setupDataSource } from "./lib/data-source";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -86,6 +87,7 @@ import { useResetPassword } from "./hooks/auth/useResetPassword";
 import { useSignup } from "./hooks/auth/useSignup";
 import { useCurrency } from "./lib/hooks/useCurrency";
 import { permissionGroups } from "./lib/permissions";
+import { resolveAuthCacheScope, type AuthCacheScope } from "./lib/cache-scope";
 import type { PermissionMatch } from "./types";
 
 const queryClient = new QueryClient({
@@ -120,6 +122,27 @@ function AuthRouteLoading() {
       </div>
     </div>
   );
+}
+
+function AuthCacheBoundary() {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id ?? null);
+  const isAuthReady = useAuthStore((s) => s.isAuthReady);
+  const setReportFilters = useReportsStore((s) => s.setFilters);
+  const previousUserId = useRef<AuthCacheScope>(undefined);
+
+  useEffect(() => {
+    const result = resolveAuthCacheScope(previousUserId.current, isAuthReady, userId);
+    previousUserId.current = result.nextUserId;
+
+    if (!result.shouldReset) return;
+
+    queryClient.clear();
+    resetRepositoryCaches();
+    setReportFilters({ stationId: null, productId: null });
+  }, [isAuthReady, queryClient, setReportFilters, userId]);
+
+  return null;
 }
 
 function PublicAuthRoute({ children }: { children: React.ReactNode }) {
@@ -1526,6 +1549,7 @@ export default function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <HashRouter>
+          <AuthCacheBoundary />
           <TitleManager />
           <CommandMenu />
           <ToastContainer />

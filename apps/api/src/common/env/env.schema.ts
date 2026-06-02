@@ -1,5 +1,21 @@
 import { z } from 'zod';
 
+const parseBooleanEnv = (value: unknown): unknown => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return value;
+
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  if (normalized === '') return undefined;
+
+  return value;
+};
+
+const envBoolean = (defaultValue: boolean) =>
+  z.preprocess(parseBooleanEnv, z.boolean().default(defaultValue));
+const optionalEnvBoolean = z.preprocess(parseBooleanEnv, z.boolean().optional());
+
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -12,11 +28,11 @@ export const envSchema = z
       .refine((v) => v.startsWith('postgres://') || v.startsWith('postgresql://'), {
         message: 'DATABASE_URL must use postgres:// or postgresql://',
       }),
-    RUN_MIGRATIONS_ON_STARTUP: z.coerce.boolean().default(false),
-    ALLOW_PROD_STARTUP_MIGRATIONS: z.coerce.boolean().default(false),
-    ENABLE_SWAGGER: z.coerce.boolean().default(false),
-    REPORTS_EXPLAIN: z.coerce.boolean().default(false),
-    REPORTS_CACHE_ENABLED: z.coerce.boolean().default(true),
+    RUN_MIGRATIONS_ON_STARTUP: envBoolean(false),
+    ALLOW_PROD_STARTUP_MIGRATIONS: envBoolean(false),
+    ENABLE_SWAGGER: envBoolean(false),
+    REPORTS_EXPLAIN: envBoolean(false),
+    REPORTS_CACHE_ENABLED: envBoolean(true),
     REPORTS_CACHE_MAX_ENTRIES: z.coerce.number().int().min(10).default(500),
     REPORTS_CACHE_TTL_SECONDS_DEFAULT: z.coerce.number().int().min(1).default(60),
     REPORTS_CACHE_TTL_SECONDS_OVERVIEW: z.coerce.number().int().min(1).default(60),
@@ -26,8 +42,8 @@ export const envSchema = z
     REPORTS_CACHE_TTL_SECONDS_CREDIT_CASHFLOW: z.coerce.number().int().min(1).default(60),
     REPORTS_CACHE_TTL_SECONDS_STATION_COMPARISON: z.coerce.number().int().min(1).default(120),
     REPORTS_SLOW_QUERY_THRESHOLD_MS: z.coerce.number().int().min(100).default(2000),
-    OPS_METRICS_ENABLED: z.coerce.boolean().default(false),
-    GOVERNANCE_ENABLED: z.coerce.boolean().default(false),
+    OPS_METRICS_ENABLED: envBoolean(false),
+    GOVERNANCE_ENABLED: envBoolean(false),
     GOVERNANCE_APPROVAL_DEADLINE_HOURS: z.coerce.number().int().min(1).default(48),
     SWAGGER_BASIC_USER: z.string().optional(),
     SWAGGER_BASIC_PASS: z.string().optional(),
@@ -39,8 +55,8 @@ export const envSchema = z
       .min(32, 'JWT_REFRESH_SECRET must be at least 32 characters — set it in your .env file'),
     JWT_ACCESS_TTL: z.coerce.number().min(60).default(900),
     JWT_REFRESH_DAYS: z.coerce.number().min(1).max(90).default(7),
-    AUTH_SELF_SIGNUP_ENABLED: z.coerce.boolean().default(false),
-    ALLOW_OVERLAPPING_SHIFTS: z.coerce.boolean().default(false),
+    AUTH_SELF_SIGNUP_ENABLED: envBoolean(false),
+    ALLOW_OVERLAPPING_SHIFTS: envBoolean(false),
     SHIFT_VARIANCE_REQUIRE_REASON_THRESHOLD: z.coerce.number().default(0),
     /** Discount above this (absolute or % of total) requires manager + reason. 0 = any discount needs reason. */
     SALES_DISCOUNT_REQUIRE_MANAGER_THRESHOLD: z.coerce.number().min(0).default(10),
@@ -56,8 +72,8 @@ export const envSchema = z
       .url()
       .default('https://www.itembagroup.llc/public/report/verify'),
     EXPORT_DEFAULT_RETENTION_DAYS: z.coerce.number().int().min(1).default(2555),
-    EXPORT_SIGN_REGULATORY_ONLY: z.coerce.boolean().default(true),
-    EXPORT_STRICT_SIGNING_REQUIRED: z.coerce.boolean().default(false),
+    EXPORT_SIGN_REGULATORY_ONLY: envBoolean(true),
+    EXPORT_STRICT_SIGNING_REQUIRED: envBoolean(false),
     SIGNING_PROVIDER: z.enum(['kms', 'hsm', 'file']).default('file'),
     SIGNING_KEY_ID: z.string().optional(),
     SIGNING_CERT_PEM: z.string().optional(),
@@ -81,7 +97,7 @@ export const envSchema = z
       .transform((v) => v || undefined),
     SMTP_HOST: z.string().optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).optional(),
-    SMTP_SECURE: z.coerce.boolean().optional(),
+    SMTP_SECURE: optionalEnvBoolean,
     SMTP_USER: z.string().optional(),
     SMTP_PASS: z.string().optional(),
     SMTP_FROM: z.string().optional(),
@@ -145,6 +161,17 @@ export const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['RUN_MIGRATIONS_ON_STARTUP'],
           message: 'Production startup migrations require ALLOW_PROD_STARTUP_MIGRATIONS=true',
+        });
+      }
+      if (
+        env.ENABLE_SWAGGER &&
+        (!env.SWAGGER_BASIC_USER?.trim() || !env.SWAGGER_BASIC_PASS?.trim())
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['ENABLE_SWAGGER'],
+          message:
+            'Production Swagger requires SWAGGER_BASIC_USER and SWAGGER_BASIC_PASS when ENABLE_SWAGGER=true',
         });
       }
       if (env.DB_SSL === 'false') {

@@ -13,6 +13,14 @@ export interface TenantScope {
   branchIds: string[];
 }
 
+export interface TenantScopeSource {
+  permissions?: readonly string[];
+  companyId?: string;
+  branchId?: string;
+  companyIds?: readonly string[];
+  branchIds?: readonly string[];
+}
+
 /**
  * Parse company and branch UUIDs from JWT permissions.
  *
@@ -23,7 +31,7 @@ export interface TenantScope {
  * // scope.branchIds  = ['uuid-3', 'uuid-4']
  * ```
  */
-export function extractTenantScope(permissions: string[]): TenantScope {
+export function extractTenantScope(permissions: readonly string[] = []): TenantScope {
   const companyIds: string[] = [];
   const branchIds: string[] = [];
 
@@ -37,15 +45,46 @@ export function extractTenantScope(permissions: string[]): TenantScope {
     }
   }
 
-  return { companyIds, branchIds };
+  return {
+    companyIds: uniqueIds(companyIds),
+    branchIds: uniqueIds(branchIds),
+  };
+}
+
+export function mergeTenantScope(source: TenantScopeSource | undefined): TenantScope {
+  const fromPermissions = extractTenantScope(source?.permissions ?? []);
+  return {
+    companyIds: uniqueIds([
+      ...fromPermissions.companyIds,
+      ...(source?.companyIds ?? []),
+      source?.companyId,
+    ]),
+    branchIds: uniqueIds([
+      ...fromPermissions.branchIds,
+      ...(source?.branchIds ?? []),
+      source?.branchId,
+    ]),
+  };
+}
+
+export function hasTenantScope(scope: TenantScope): boolean {
+  return scope.companyIds.length > 0 || scope.branchIds.length > 0;
+}
+
+export function isTenantScopedUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value);
 }
 
 /** Check if a user has access to a specific company */
-export function hasCompanyAccess(permissions: string[], companyId: string): boolean {
+export function hasCompanyAccess(permissions: readonly string[], companyId: string): boolean {
   return permissions.includes(`company:${companyId}`);
 }
 
 /** Check if a user has access to a specific branch */
-export function hasBranchAccess(permissions: string[], branchId: string): boolean {
+export function hasBranchAccess(permissions: readonly string[], branchId: string): boolean {
   return permissions.includes(`branch:${branchId}`);
+}
+
+function uniqueIds(values: readonly (string | undefined)[]): string[] {
+  return [...new Set(values.filter(isTenantScopedUuid))];
 }

@@ -199,10 +199,15 @@ export class ShiftsService {
     const allowOverlapping = this.config.get<boolean>('ALLOW_OVERLAPPING_SHIFTS', false);
 
     return this.db.transaction(async (tx) => {
-      const [branch] = await tx
-        .select({ id: branches.id, stationId: branches.stationId })
-        .from(branches)
-        .where(and(eq(branches.id, dto.branchId), isNull(branches.deletedAt)));
+      const [branch] = (
+        await tx.execute<{ id: string; stationId: string }>(sql`
+          SELECT id, station_id AS "stationId"
+          FROM branches
+          WHERE id = ${dto.branchId}
+            AND deleted_at IS NULL
+          FOR UPDATE
+        `)
+      ).rows;
       if (!branch) throw new NotFoundException('Branch not found');
 
       const [station] = await tx

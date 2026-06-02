@@ -2,12 +2,14 @@ import { InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
-import { and, asc, eq, isNull, lte, or } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
 import {
   expenseEntries,
+  pettyCashLedger,
+  branches,
   shifts,
   meterReadings,
   shiftCollections,
@@ -26,6 +28,7 @@ import {
 } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
 import { NotificationTriggersService } from '../notifications/notification-triggers.service';
+import { applySaleVoidReversal } from '../sales/sale-void-reversal';
 import type {
   ActionReasonDto,
   CreateApprovalDto,
@@ -37,6 +40,9 @@ import type {
 import { PolicyEvaluatorService, type EvaluatePolicyInput } from './policy-evaluator.service';
 
 type Schema = typeof schema;
+
+const PETTY_CASH_TOPUP = 'topup';
+const PETTY_CASH_SPEND = 'spend';
 
 export interface GovernanceActor {
   userId: string;
@@ -156,6 +162,7 @@ export class GovernanceService {
       action: 'deadline_auto_reject',
       after: { status: 'rejected', reason } as object,
       userId: request.requestedBy,
+      companyId: request.companyId,
     });
 
     // Notify the requester about the expiry
@@ -221,6 +228,7 @@ export class GovernanceService {
       action: 'create',
       after: inserted as object,
       userId: actor.userId,
+      companyId: inserted.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -261,6 +269,7 @@ export class GovernanceService {
       before: before as object,
       after: updated as object,
       userId: actor.userId,
+      companyId: updated.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -332,6 +341,7 @@ export class GovernanceService {
       action: 'create_draft',
       after: inserted as object,
       userId: actor.userId,
+      companyId: inserted.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -343,27 +353,32 @@ export class GovernanceService {
     if (!this.isEnabled()) {
       throw new ForbiddenException('Governance workflow is disabled');
     }
-    const [request] = await this.db
-      .select()
-      .from(approvalRequests)
-      .where(and(eq(approvalRequests.id, id), isNull(approvalRequests.deletedAt)));
-    if (!request) throw new NotFoundException('Approval request not found');
-    if (request.status !== 'draft') throw new ConflictException(`Only draft requests can be submitted`);
-    if (request.requestedBy !== actor.userId) throw new ForbiddenException('Only requester can submit this draft');
 
-    const policy = await this.evaluatePolicy({
-      entityType: request.entityType,
-      actionType: request.actionType,
-      companyId: request.companyId,
-      branchId: request.branchId,
-      amount: this.readNumericMeta(request.metaJson, 'amount'),
-      percentage: this.readNumericMeta(request.metaJson, 'percentage'),
-    });
-    if (!policy) throw new ConflictException('No matching policy for this request');
-    const steps = [...policy.approvalStepsJson].sort((a, b) => a.stepOrder - b.stepOrder);
-    if (!steps.length) throw new ConflictException('Policy has no approval steps');
+    const result = await this.db.transaction(async (tx) => {
+      const [request] = await tx
+        .select()
+        .from(approvalRequests)
+        .where(and(eq(approvalRequests.id, id), isNull(approvalRequests.deletedAt)))
+        .for('update');
+      if (!request) throw new NotFoundException('Approval request not found');
+      if (request.requestedBy !== actor.userId) throw new ForbiddenException('Only requester can submit this draft');
+      if (request.status === 'submitted') {
+        return { submitted: false, request, steps: this.readPolicySteps(request.metaJson) };
+      }
+      if (request.status !== 'draft') throw new ConflictException(`Only draft requests can be submitted`);
 
-    await this.db.transaction(async (tx) => {
+      const policy = await this.evaluatePolicyWithClient(tx as NodePgDatabase<Schema>, {
+        entityType: request.entityType,
+        actionType: request.actionType,
+        companyId: request.companyId,
+        branchId: request.branchId,
+        amount: this.readNumericMeta(request.metaJson, 'amount'),
+        percentage: this.readNumericMeta(request.metaJson, 'percentage'),
+      });
+      if (!policy) throw new ConflictException('No matching policy for this request');
+      const steps = [...policy.approvalStepsJson].sort((a, b) => a.stepOrder - b.stepOrder);
+      if (!steps.length) throw new ConflictException('Policy has no approval steps');
+
       await tx
         .update(approvalRequests)
         .set({
@@ -396,27 +411,32 @@ export class GovernanceService {
         actorUserId: actor.userId,
         payloadJson: { policyId: policy.id },
       });
+
+      return { submitted: true, request, steps };
     });
+
+    if (!result.submitted) return this.getApprovalRequest(id);
 
     await this.audit.log({
       entity: 'governance_approval_requests',
       entityId: id,
       action: 'submit',
       userId: actor.userId,
+      companyId: result.request.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
 
     // Send notification to approvers
     try {
-      const approvers = await this.getApproversForSteps(steps);
+      const approvers = await this.getApproversForSteps(result.steps);
       await this.notificationTriggers.notifyApprovalRequestCreated(id, {
-        companyId: request.companyId,
-        branchId: request.branchId,
-        title: `${request.entityType} ${request.actionType}`,
-        entityType: request.entityType,
-        entityId: request.entityId,
-        amount: this.readNumericMeta(request.metaJson, 'amount'),
+        companyId: result.request.companyId,
+        branchId: result.request.branchId,
+        title: `${result.request.entityType} ${result.request.actionType}`,
+        entityType: result.request.entityType,
+        entityId: result.request.entityId,
+        amount: this.readNumericMeta(result.request.metaJson, 'amount'),
         approvers,
       });
     } catch (error) {
@@ -465,36 +485,52 @@ export class GovernanceService {
   ) {
     if (!this.isEnabled()) throw new ForbiddenException('Governance workflow is disabled');
 
-    const [request] = await this.db
-      .select()
-      .from(approvalRequests)
-      .where(and(eq(approvalRequests.id, requestId), isNull(approvalRequests.deletedAt)));
-    if (!request) throw new NotFoundException('Approval request not found');
-    if (request.status !== 'submitted') throw new ConflictException(`Request status is ${request.status}`);
+    const result = await this.db.transaction(async (tx) => {
+      const [request] = await tx
+        .select()
+        .from(approvalRequests)
+        .where(and(eq(approvalRequests.id, requestId), isNull(approvalRequests.deletedAt)))
+        .for('update');
+      if (!request) throw new NotFoundException('Approval request not found');
 
-    const steps = await this.db
-      .select()
-      .from(approvalSteps)
-      .where(and(eq(approvalSteps.approvalRequestId, requestId), isNull(approvalSteps.deletedAt)))
-      .orderBy(asc(approvalSteps.stepOrder));
-    const current = steps.find((s) => s.status === 'pending');
-    if (!current) throw new ConflictException('No pending step');
+      const finalDecisionStatus = decision === 'approve' ? 'approved' : 'rejected';
+      if (request.status === finalDecisionStatus) {
+        return { changed: false, request, requestStatus: request.status };
+      }
+      if (request.status !== 'submitted') throw new ConflictException(`Request status is ${request.status}`);
 
-    const policyStep = this.readPolicySteps(request.metaJson).find((s) => s.stepOrder === current.stepOrder);
-    if (!policyStep) throw new ConflictException('Missing policy step snapshot');
+      const steps = await tx
+        .select()
+        .from(approvalSteps)
+        .where(and(eq(approvalSteps.approvalRequestId, requestId), isNull(approvalSteps.deletedAt)))
+        .orderBy(asc(approvalSteps.stepOrder))
+        .for('update');
+      const current = steps.find((s) => s.status === 'pending');
+      if (!current) throw new ConflictException('No pending step');
 
-    if (violatesMakerChecker(decision, request.requestedBy, actor.userId, policyStep.allowSelfApproval)) {
-      throw new ForbiddenException('Maker-checker violation: requester cannot approve own request');
-    }
-    if (current.requiredPermission && !actor.permissions.includes(current.requiredPermission)) {
-      throw new ForbiddenException(`Missing permission: ${current.requiredPermission}`);
-    }
-    if (current.requiredRole && !(actor.roles ?? []).includes(current.requiredRole)) {
-      throw new ForbiddenException(`Missing role: ${current.requiredRole}`);
-    }
+      const expectedStepStatus = decision === 'approve' ? 'approved' : 'rejected';
+      const lastDecided = [...steps]
+        .filter((s) => s.status === 'approved' || s.status === 'rejected')
+        .sort((a, b) => a.stepOrder - b.stepOrder)
+        .at(-1);
+      if (lastDecided?.decidedBy === actor.userId && lastDecided.status === expectedStepStatus) {
+        return { changed: false, request, requestStatus: request.status };
+      }
 
-    await this.db.transaction(async (tx) => {
-      await tx
+      const policyStep = this.readPolicySteps(request.metaJson).find((s) => s.stepOrder === current.stepOrder);
+      if (!policyStep) throw new ConflictException('Missing policy step snapshot');
+
+      if (violatesMakerChecker(decision, request.requestedBy, actor.userId, policyStep.allowSelfApproval)) {
+        throw new ForbiddenException('Maker-checker violation: requester cannot approve own request');
+      }
+      if (current.requiredPermission && !actor.permissions.includes(current.requiredPermission)) {
+        throw new ForbiddenException(`Missing permission: ${current.requiredPermission}`);
+      }
+      if (current.requiredRole && !(actor.roles ?? []).includes(current.requiredRole)) {
+        throw new ForbiddenException(`Missing role: ${current.requiredRole}`);
+      }
+
+      const [updatedStep] = await tx
         .update(approvalSteps)
         .set({
           status: decision === 'approve' ? 'approved' : 'rejected',
@@ -504,7 +540,11 @@ export class GovernanceService {
           updatedAt: new Date(),
           updatedBy: actor.userId,
         })
-        .where(eq(approvalSteps.id, current.id));
+        .where(and(eq(approvalSteps.id, current.id), eq(approvalSteps.status, 'pending')))
+        .returning({ id: approvalSteps.id });
+      if (!updatedStep) {
+        return { changed: false, request, requestStatus: request.status };
+      }
 
       const hasRemaining = steps.some((s) => s.status === 'pending' && s.id !== current.id);
       const requestStatus = decision === 'reject' ? 'rejected' : hasRemaining ? 'submitted' : 'approved';
@@ -528,26 +568,30 @@ export class GovernanceService {
         await this.applyDecisionEffects(tx as NodePgDatabase<Schema>, request, 'rejected', actor, reason);
       }
 
+      return { changed: true, request, requestStatus };
+    });
+
+    if (result.changed) {
       // Send notification to requester about decision
       try {
         if (decision === 'approve') {
           await this.notificationTriggers.notifyApprovalApproved(requestId, {
-            companyId: request.companyId,
-            branchId: request.branchId,
-            title: `${request.entityType} ${request.actionType}`,
-            entityType: request.entityType,
-            entityId: request.entityId,
-            requesterId: request.requestedBy,
+            companyId: result.request.companyId,
+            branchId: result.request.branchId,
+            title: `${result.request.entityType} ${result.request.actionType}`,
+            entityType: result.request.entityType,
+            entityId: result.request.entityId,
+            requesterId: result.request.requestedBy,
             approvedBy: actor.userId,
           });
         } else {
           await this.notificationTriggers.notifyApprovalRejected(requestId, {
-            companyId: request.companyId,
-            branchId: request.branchId,
-            title: `${request.entityType} ${request.actionType}`,
-            entityType: request.entityType,
-            entityId: request.entityId,
-            requesterId: request.requestedBy,
+            companyId: result.request.companyId,
+            branchId: result.request.branchId,
+            title: `${result.request.entityType} ${result.request.actionType}`,
+            entityType: result.request.entityType,
+            entityId: result.request.entityId,
+            requesterId: result.request.requestedBy,
             rejectedBy: actor.userId,
             rejectionReason: reason,
           });
@@ -555,17 +599,18 @@ export class GovernanceService {
       } catch (error) {
         this.logger.error('Failed to send approval decision notification:', error);
       }
-    });
 
-    await this.audit.log({
-      entity: 'governance_approval_requests',
-      entityId: requestId,
-      action: decision === 'approve' ? 'approve_step' : 'reject_step',
-      after: { reason },
-      userId: actor.userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
-    });
+      await this.audit.log({
+        entity: 'governance_approval_requests',
+        entityId: requestId,
+        action: decision === 'approve' ? 'approve_step' : 'reject_step',
+        after: { reason },
+        userId: actor.userId,
+        companyId: result.request.companyId,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+    }
 
     return this.getApprovalRequest(requestId);
   }
@@ -614,6 +659,7 @@ export class GovernanceService {
       action: 'cancel',
       after: { reason: dto.reason },
       userId: actor.userId,
+      companyId: request.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -623,7 +669,11 @@ export class GovernanceService {
 
   async evaluatePolicy(input: EvaluatePolicyInput) {
     if (!this.isEnabled()) return null;
-    const rows = await this.db
+    return this.evaluatePolicyWithClient(this.db, input);
+  }
+
+  private async evaluatePolicyWithClient(client: NodePgDatabase<Schema>, input: EvaluatePolicyInput) {
+    const rows = await client
       .select()
       .from(approvalPolicies)
       .where(
@@ -646,6 +696,27 @@ export class GovernanceService {
     ctx: GovernanceAuditContext,
   ) {
     if (!this.isEnabled()) return null;
+    const [existing] = await this.db
+      .select()
+      .from(approvalRequests)
+      .where(
+        and(
+          eq(approvalRequests.companyId, payload.companyId),
+          eq(approvalRequests.branchId, payload.branchId),
+          eq(approvalRequests.entityType, payload.entityType),
+          eq(approvalRequests.entityId, payload.entityId),
+          eq(approvalRequests.actionType, payload.actionType),
+          or(eq(approvalRequests.status, 'draft'), eq(approvalRequests.status, 'submitted')),
+          isNull(approvalRequests.deletedAt),
+        ),
+      )
+      .orderBy(asc(approvalRequests.requestedAt));
+    if (existing) {
+      return existing.status === 'draft' && existing.requestedBy === actor.userId
+        ? this.submitApproval(existing.id, actor, ctx)
+        : this.getApprovalRequest(existing.id);
+    }
+
     const policy = await this.evaluatePolicy({
       entityType: payload.entityType,
       actionType: payload.actionType,
@@ -699,6 +770,17 @@ export class GovernanceService {
     reason: string | undefined,
   ): Promise<void> {
     if (request.entityType === 'expense_entry' && request.actionType === 'approve') {
+      const [expense] = await tx
+        .select()
+        .from(expenseEntries)
+        .where(and(eq(expenseEntries.id, request.entityId), isNull(expenseEntries.deletedAt)))
+        .for('update');
+      if (!expense) throw new NotFoundException('Expense entry not found');
+
+      if (outcome === 'approved' && expense.status !== 'approved' && expense.paymentMethod === 'petty_cash') {
+        await this.recordPettyCashExpenseSpend(tx, expense, actor);
+      }
+
       await tx
         .update(expenseEntries)
         .set({
@@ -715,6 +797,7 @@ export class GovernanceService {
           action: outcome === 'approved' ? 'governance_approved' : 'governance_rejected',
           after: { status: outcome === 'approved' ? 'approved' : 'rejected', source: 'governance' } as object,
           userId: actor.userId,
+          companyId: request.companyId,
         },
         tx,
       );
@@ -723,17 +806,14 @@ export class GovernanceService {
 
     if (request.entityType === 'sale_transaction' && request.actionType === 'void') {
       if (outcome === 'approved') {
-        await tx
-          .update(salesTransactions)
-          .set({
-            status: 'voided',
-            voidedAt: new Date(),
-            voidedBy: actor.userId,
-            voidReason: reason ?? this.readStringMeta(request.metaJson, 'voidReason') ?? request.reason ?? null,
-            updatedAt: new Date(),
-            updatedBy: actor.userId,
-          })
-          .where(eq(salesTransactions.id, request.entityId));
+        await applySaleVoidReversal(
+          tx,
+          this.audit,
+          request.entityId,
+          reason ?? this.readStringMeta(request.metaJson, 'voidReason') ?? request.reason,
+          { userId: actor.userId },
+          { auditAction: 'governance_void_approved' },
+        );
       } else {
         await tx
           .update(salesTransactions)
@@ -742,18 +822,24 @@ export class GovernanceService {
             updatedAt: new Date(),
             updatedBy: actor.userId,
           })
-          .where(eq(salesTransactions.id, request.entityId));
+          .where(
+            and(
+              eq(salesTransactions.id, request.entityId),
+              eq(salesTransactions.status, 'pending_void_approval'),
+            ),
+          );
+        await this.audit.log(
+          {
+            entity: 'sales_transactions',
+            entityId: request.entityId,
+            action: 'governance_void_rejected',
+            after: { status: 'completed', source: 'governance' } as object,
+            userId: actor.userId,
+            companyId: request.companyId,
+          },
+          tx,
+        );
       }
-      await this.audit.log(
-        {
-          entity: 'sales_transactions',
-          entityId: request.entityId,
-          action: outcome === 'approved' ? 'governance_void_approved' : 'governance_void_rejected',
-          after: { status: outcome === 'approved' ? 'voided' : 'completed', source: 'governance' } as object,
-          userId: actor.userId,
-        },
-        tx,
-      );
       return;
     }
 
@@ -787,6 +873,7 @@ export class GovernanceService {
             action: 'governance_rejected',
             after: { status: 'rejected', source: 'governance', reason } as object,
             userId: actor.userId,
+            companyId: request.companyId,
           },
           tx,
         );
@@ -796,10 +883,24 @@ export class GovernanceService {
       // Approved: apply the actual stock changes
       const volumeDelta = Number(this.readNumber(meta, 'volumeDelta') ?? 0);
 
-      const [tankRow] = await tx
-        .select({ id: tanks.id, currentLevel: tanks.currentLevel, capacity: tanks.capacity, productId: tanks.productId })
-        .from(tanks)
-        .where(and(eq(tanks.id, tankId), isNull(tanks.deletedAt)));
+      const [tankRow] = (
+        await tx.execute<{
+          id: string;
+          currentLevel: string;
+          capacity: string;
+          productId: string | null;
+        }>(sql`
+          SELECT
+            id,
+            current_level AS "currentLevel",
+            capacity,
+            product_id AS "productId"
+          FROM tanks
+          WHERE id = ${tankId}
+            AND deleted_at IS NULL
+          FOR UPDATE
+        `)
+      ).rows;
       if (!tankRow) throw new NotFoundException('Tank not found for approved adjustment');
 
       const current = Number(tankRow.currentLevel || 0);
@@ -849,7 +950,7 @@ export class GovernanceService {
       await tx
         .update(tanks)
         .set({
-          currentLevel: String(nextLevel.toFixed(3)),
+          currentLevel: sql`(${tanks.currentLevel} + ${volumeDelta.toFixed(3)}::numeric)`,
           updatedAt: new Date(),
           updatedBy: actor.userId,
         })
@@ -875,6 +976,7 @@ export class GovernanceService {
           action: 'governance_approved_create',
           after: { id: adjId, source: 'governance' } as object,
           userId: actor.userId,
+          companyId: request.companyId,
         },
         tx,
       );
@@ -945,10 +1047,93 @@ export class GovernanceService {
           action: outcome === 'approved' ? 'governance_close_approved' : 'governance_close_rejected',
           after: { status: outcome === 'approved' ? 'closed' : 'open', source: 'governance' } as object,
           userId: actor.userId,
+          companyId: request.companyId,
         },
         tx,
       );
     }
+  }
+
+  private async recordPettyCashExpenseSpend(
+    tx: NodePgDatabase<Schema>,
+    expense: typeof expenseEntries.$inferSelect,
+    actor: GovernanceActor,
+  ): Promise<void> {
+    const amount = Number(expense.amount || 0);
+    if (!(amount > 0)) throw new ConflictException('Expense amount must be greater than zero');
+
+    await this.lockPettyCashBranch(tx, expense.companyId, expense.branchId);
+    const balance = await this.getPettyCashBalance(expense.companyId, expense.branchId, tx);
+    const nextBalance = balance - amount;
+    if (nextBalance < 0) throw new ConflictException('Insufficient petty cash balance');
+
+    const [inserted] = await tx
+      .insert(pettyCashLedger)
+      .values({
+        companyId: expense.companyId,
+        branchId: expense.branchId,
+        transactionType: PETTY_CASH_SPEND,
+        amount: String(amount.toFixed(2)),
+        category: expense.category?.slice(0, 64) || null,
+        notes: `Expense ${expense.entryNumber}: ${expense.vendor}`.slice(0, 512),
+        balanceAfter: String(nextBalance.toFixed(2)),
+        createdBy: actor.userId,
+        updatedBy: actor.userId,
+      })
+      .returning({ id: pettyCashLedger.id });
+    if (!inserted) throw new InternalServerErrorException('Failed to insert petty cash ledger entry');
+
+    await this.audit.log(
+      {
+        entity: 'petty_cash_ledger',
+        entityId: inserted.id,
+        action: PETTY_CASH_SPEND,
+        after: {
+          expenseEntryId: expense.id,
+          amount: String(amount.toFixed(2)),
+          balanceAfter: String(nextBalance.toFixed(2)),
+        } as object,
+        userId: actor.userId,
+        companyId: expense.companyId,
+      },
+      tx,
+    );
+  }
+
+  private async lockPettyCashBranch(
+    tx: NodePgDatabase<Schema>,
+    companyId: string,
+    branchId: string,
+  ): Promise<void> {
+    const [branch] = await tx
+      .select({ id: branches.id })
+      .from(branches)
+      .where(and(eq(branches.id, branchId), eq(branches.companyId, companyId), isNull(branches.deletedAt)))
+      .for('update');
+    if (!branch) throw new NotFoundException('Branch not found for petty cash transaction');
+  }
+
+  private async getPettyCashBalance(
+    companyId: string,
+    branchId: string,
+    tx: NodePgDatabase<Schema>,
+  ): Promise<number> {
+    const [row] = await tx
+      .select({
+        topup: sql<number>`coalesce(sum(case when ${pettyCashLedger.transactionType} = ${PETTY_CASH_TOPUP} then ${pettyCashLedger.amount} else 0 end), 0)::numeric`,
+        spend: sql<number>`coalesce(sum(case when ${pettyCashLedger.transactionType} = ${PETTY_CASH_SPEND} then ${pettyCashLedger.amount} else 0 end), 0)::numeric`,
+      })
+      .from(pettyCashLedger)
+      .where(
+        and(
+          eq(pettyCashLedger.companyId, companyId),
+          eq(pettyCashLedger.branchId, branchId),
+          isNull(pettyCashLedger.deletedAt),
+        ),
+      );
+    const topup = Number(row?.topup ?? 0);
+    const spend = Number(row?.spend ?? 0);
+    return Math.round((topup - spend) * 100) / 100;
   }
 
   private readObjectMeta(meta: unknown): Record<string, unknown> {

@@ -19,12 +19,12 @@ export class SystemService {
     return { status: 'ok' };
   }
 
-  async getReadiness(): Promise<{ status: string; database: string }> {
+  async getReadiness(): Promise<{ status: 'ok' | 'error'; database: 'up' | 'down' }> {
     const dbOk = await this.systemRepository.isDatabaseReady();
     const database = dbOk ? 'up' : 'down';
     if (!dbOk) this.logger.warn('Readiness check: database is down');
     return {
-      status: dbOk ? 'ok' : 'degraded',
+      status: dbOk ? 'ok' : 'error',
       database,
     };
   }

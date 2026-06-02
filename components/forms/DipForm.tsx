@@ -30,11 +30,11 @@ export function DipForm({ onSuccess, onCancel }: { onSuccess: () => void; onCanc
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dips'] });
-      addToast({ type: 'success', message: 'Dip recorded successfully' });
+      addToast('Dip recorded successfully', 'success');
       onSuccess();
     },
     onError: (err: any) => {
-      addToast({ type: 'error', message: err?.message ?? 'Failed to record dip' });
+      addToast(err?.message ?? 'Failed to record dip', 'error');
     },
   });
 

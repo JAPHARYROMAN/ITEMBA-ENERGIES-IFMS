@@ -25,7 +25,7 @@ export function useActiveStation() {
   const { stationId: selectedStationId, setFilters } = useReportsStore();
 
   const { data: stations = [], isLoading } = useQuery({
-    queryKey: ['stations-switcher'],
+    queryKey: ['stations'],
     queryFn: fetchStations,
     staleTime: 5 * 60 * 1000,
   });

@@ -15,6 +15,8 @@ import {
   expenseCategories,
   expenseEntries,
   pettyCashLedger,
+  branches,
+  approvalRequests,
   roles,
   userRoles,
 } from '../../database/schema';
@@ -39,6 +41,13 @@ const EXPENSE_STATUS_REJECTED = 'rejected';
 
 const TX_TOPUP = 'topup';
 const TX_SPEND = 'spend';
+
+export function requiresGovernanceWorkflowDecision(
+  status: string,
+  hasActiveApprovalRequest: boolean,
+): boolean {
+  return status === EXPENSE_STATUS_PENDING_APPROVAL || hasActiveApprovalRequest;
+}
 
 const CATEGORY_SORT_COLUMNS: Record<
   string,
@@ -178,6 +187,8 @@ export class ExpensesService {
     dto: CreateExpenseCategoryDto,
     ctx: AuditContext,
   ): Promise<ExpenseCategoryItem> {
+    await this.assertBranchInCompany(dto.companyId, dto.branchId);
+
     try {
       const [inserted] = await this.db
         .insert(expenseCategories)
@@ -208,6 +219,7 @@ export class ExpensesService {
         action: 'create',
         after: inserted as object,
         userId: ctx.userId,
+        companyId: inserted.companyId,
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
@@ -234,6 +246,10 @@ export class ExpensesService {
     if (dto.description !== undefined) set.description = dto.description?.trim() || null;
     if (dto.status !== undefined) set.status = dto.status;
 
+    const nextCompanyId = dto.companyId ?? before.companyId;
+    const nextBranchId = dto.branchId ?? before.branchId;
+    await this.assertBranchInCompany(nextCompanyId, nextBranchId);
+
     try {
       const [updated] = await this.db
         .update(expenseCategories)
@@ -257,6 +273,7 @@ export class ExpensesService {
         before: before as object,
         after: updated as object,
         userId: ctx.userId,
+        companyId: updated.companyId,
         ip: ctx.ip,
         userAgent: ctx.userAgent,
       });
@@ -283,12 +300,15 @@ export class ExpensesService {
       action: 'delete',
       before: before as object,
       userId: ctx.userId,
+      companyId: before.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
   }
 
   async createExpenseEntry(dto: CreateExpenseEntryDto, ctx: AuditContext): Promise<ExpenseEntryItem> {
+    await this.assertExpenseScope(dto.companyId, dto.branchId, dto.categoryId ?? null);
+
     const entryNumber = `EXP-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const [inserted] = await this.db
       .insert(expenseEntries)
@@ -332,6 +352,7 @@ export class ExpensesService {
       action: 'create',
       after: inserted as object,
       userId: ctx.userId,
+      companyId: inserted.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -367,6 +388,11 @@ export class ExpensesService {
     if (dto.billableDepartment !== undefined) set.billableDepartment = dto.billableDepartment?.trim() || null;
     if (dto.attachmentName !== undefined) set.attachmentName = dto.attachmentName?.trim() || null;
 
+    const nextCompanyId = dto.companyId ?? before.companyId;
+    const nextBranchId = dto.branchId ?? before.branchId;
+    const nextCategoryId = dto.categoryId !== undefined ? dto.categoryId : before.categoryId;
+    await this.assertExpenseScope(nextCompanyId, nextBranchId, nextCategoryId);
+
     const [updated] = await this.db
       .update(expenseEntries)
       .set(set as typeof expenseEntries.$inferInsert)
@@ -397,6 +423,7 @@ export class ExpensesService {
       before: before as object,
       after: updated as object,
       userId: ctx.userId,
+      companyId: updated.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -502,6 +529,7 @@ export class ExpensesService {
       action: 'delete',
       before: before as object,
       userId: ctx.userId,
+      companyId: before.companyId,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
     });
@@ -510,6 +538,9 @@ export class ExpensesService {
   async submitExpenseEntry(id: string, ctx: AuditContext): Promise<ExpenseEntryItem> {
     const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
     if (!before) throw new NotFoundException('Expense entry not found');
+    if (before.status === EXPENSE_STATUS_SUBMITTED || before.status === EXPENSE_STATUS_PENDING_APPROVAL) {
+      return this.getExpenseEntry(id);
+    }
     if (before.status !== EXPENSE_STATUS_DRAFT) {
       throw new BadRequestException(`Only ${EXPENSE_STATUS_DRAFT} entries can be submitted`);
     }
@@ -542,6 +573,130 @@ export class ExpensesService {
           updatedAt: new Date(),
           updatedBy: ctx.userId,
         })
+        .where(and(eq(expenseEntries.id, id), eq(expenseEntries.status, EXPENSE_STATUS_DRAFT)))
+        .returning({
+          id: expenseEntries.id,
+          companyId: expenseEntries.companyId,
+          branchId: expenseEntries.branchId,
+          entryNumber: expenseEntries.entryNumber,
+          categoryId: expenseEntries.categoryId,
+          category: expenseEntries.category,
+          amount: expenseEntries.amount,
+          vendor: expenseEntries.vendor,
+          paymentMethod: expenseEntries.paymentMethod,
+          description: expenseEntries.description,
+          billableDepartment: expenseEntries.billableDepartment,
+          attachmentName: expenseEntries.attachmentName,
+          rejectionReason: expenseEntries.rejectionReason,
+          status: expenseEntries.status,
+          createdAt: expenseEntries.createdAt,
+        });
+      if (!pending) return this.getExpenseEntry(id);
+
+      await this.audit.log({
+        entity: 'expense_entries',
+        entityId: id,
+        action: 'submit_for_approval',
+        before: before as object,
+        after: pending as object,
+        userId: ctx.userId,
+        companyId: pending.companyId,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return pending;
+    }
+
+    const [updated] = await this.db
+      .update(expenseEntries)
+      .set({
+        status: EXPENSE_STATUS_SUBMITTED,
+        rejectionReason: null,
+        updatedAt: new Date(),
+        updatedBy: ctx.userId,
+      })
+      .where(and(eq(expenseEntries.id, id), eq(expenseEntries.status, EXPENSE_STATUS_DRAFT)))
+      .returning({
+        id: expenseEntries.id,
+        companyId: expenseEntries.companyId,
+        branchId: expenseEntries.branchId,
+        entryNumber: expenseEntries.entryNumber,
+        categoryId: expenseEntries.categoryId,
+        category: expenseEntries.category,
+        amount: expenseEntries.amount,
+        vendor: expenseEntries.vendor,
+        paymentMethod: expenseEntries.paymentMethod,
+        description: expenseEntries.description,
+        billableDepartment: expenseEntries.billableDepartment,
+        attachmentName: expenseEntries.attachmentName,
+        rejectionReason: expenseEntries.rejectionReason,
+        status: expenseEntries.status,
+        createdAt: expenseEntries.createdAt,
+      });
+    if (!updated) return this.getExpenseEntry(id);
+    await this.audit.log({
+      entity: 'expense_entries',
+      entityId: id,
+      action: 'submit',
+      before: before as object,
+      after: updated as object,
+      userId: ctx.userId,
+      companyId: updated.companyId,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return updated;
+  }
+
+  async approveExpenseEntry(id: string, ctx: AuditContext): Promise<ExpenseEntryItem> {
+    await this.assertManager(ctx.userId);
+
+    return this.db.transaction(async (tx) => {
+      const client = tx as NodePgDatabase<Schema>;
+      const [before] = await tx
+        .select()
+        .from(expenseEntries)
+        .where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)))
+        .for('update');
+      if (!before) throw new NotFoundException('Expense entry not found');
+
+      if (requiresGovernanceWorkflowDecision(before.status, await this.hasActiveExpenseApprovalRequest(id, client))) {
+        throw new ConflictException('Expense entry must be approved through the active governance workflow');
+      }
+      if (before.status !== EXPENSE_STATUS_SUBMITTED) {
+        throw new BadRequestException(
+          `Only ${EXPENSE_STATUS_SUBMITTED} entries can be approved (current: ${before.status})`,
+        );
+      }
+
+      if (before.createdBy === ctx.userId) {
+        throw new ForbiddenException('Cannot approve your own expense entry');
+      }
+
+      if (before.paymentMethod === 'petty_cash') {
+        await this.insertPettyCashLedgerEntry(
+          TX_SPEND,
+          {
+            companyId: before.companyId,
+            branchId: before.branchId,
+            amount: Number(before.amount),
+            category: before.category,
+            notes: `Expense ${before.entryNumber}: ${before.vendor}`.slice(0, 512),
+          },
+          ctx,
+          client,
+        );
+      }
+
+      const [updated] = await tx
+        .update(expenseEntries)
+        .set({
+          status: EXPENSE_STATUS_APPROVED,
+          rejectionReason: null,
+          updatedAt: new Date(),
+          updatedBy: ctx.userId,
+        })
         .where(eq(expenseEntries.id, id))
         .returning({
           id: expenseEntries.id,
@@ -560,116 +715,23 @@ export class ExpensesService {
           status: expenseEntries.status,
           createdAt: expenseEntries.createdAt,
         });
-      if (!pending) throw new InternalServerErrorException('Failed to set expense pending approval');
-
-      await this.audit.log({
-        entity: 'expense_entries',
-        entityId: id,
-        action: 'submit_for_approval',
-        before: before as object,
-        after: pending as object,
-        userId: ctx.userId,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
-      });
-
-      return pending;
-    }
-
-    const [updated] = await this.db
-      .update(expenseEntries)
-      .set({
-        status: EXPENSE_STATUS_SUBMITTED,
-        rejectionReason: null,
-        updatedAt: new Date(),
-        updatedBy: ctx.userId,
-      })
-      .where(eq(expenseEntries.id, id))
-      .returning({
-        id: expenseEntries.id,
-        companyId: expenseEntries.companyId,
-        branchId: expenseEntries.branchId,
-        entryNumber: expenseEntries.entryNumber,
-        categoryId: expenseEntries.categoryId,
-        category: expenseEntries.category,
-        amount: expenseEntries.amount,
-        vendor: expenseEntries.vendor,
-        paymentMethod: expenseEntries.paymentMethod,
-        description: expenseEntries.description,
-        billableDepartment: expenseEntries.billableDepartment,
-        attachmentName: expenseEntries.attachmentName,
-        rejectionReason: expenseEntries.rejectionReason,
-        status: expenseEntries.status,
-        createdAt: expenseEntries.createdAt,
-      });
-    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
-    await this.audit.log({
-      entity: 'expense_entries',
-      entityId: id,
-      action: 'submit',
-      before: before as object,
-      after: updated as object,
-      userId: ctx.userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
-    });
-    return updated;
-  }
-
-  async approveExpenseEntry(id: string, ctx: AuditContext): Promise<ExpenseEntryItem> {
-    await this.assertManager(ctx.userId);
-    const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
-    if (!before) throw new NotFoundException('Expense entry not found');
-
-    const approvableStatuses = [EXPENSE_STATUS_SUBMITTED, EXPENSE_STATUS_PENDING_APPROVAL];
-    if (!approvableStatuses.includes(before.status)) {
-      throw new BadRequestException(
-        `Only ${EXPENSE_STATUS_SUBMITTED} or ${EXPENSE_STATUS_PENDING_APPROVAL} entries can be approved (current: ${before.status})`,
+      if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
+      await this.audit.log(
+        {
+          entity: 'expense_entries',
+          entityId: id,
+          action: 'approve',
+          before: before as object,
+          after: updated as object,
+          userId: ctx.userId,
+          companyId: updated.companyId,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+        client,
       );
-    }
-
-    if (before.createdBy === ctx.userId) {
-      throw new ForbiddenException('Cannot approve your own expense entry');
-    }
-
-    const [updated] = await this.db
-      .update(expenseEntries)
-      .set({
-        status: EXPENSE_STATUS_APPROVED,
-        rejectionReason: null,
-        updatedAt: new Date(),
-        updatedBy: ctx.userId,
-      })
-      .where(eq(expenseEntries.id, id))
-      .returning({
-        id: expenseEntries.id,
-        companyId: expenseEntries.companyId,
-        branchId: expenseEntries.branchId,
-        entryNumber: expenseEntries.entryNumber,
-        categoryId: expenseEntries.categoryId,
-        category: expenseEntries.category,
-        amount: expenseEntries.amount,
-        vendor: expenseEntries.vendor,
-        paymentMethod: expenseEntries.paymentMethod,
-        description: expenseEntries.description,
-        billableDepartment: expenseEntries.billableDepartment,
-        attachmentName: expenseEntries.attachmentName,
-        rejectionReason: expenseEntries.rejectionReason,
-        status: expenseEntries.status,
-        createdAt: expenseEntries.createdAt,
-      });
-    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
-    await this.audit.log({
-      entity: 'expense_entries',
-      entityId: id,
-      action: 'approve',
-      before: before as object,
-      after: updated as object,
-      userId: ctx.userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
+      return updated;
     });
-    return updated;
   }
 
   async rejectExpenseEntry(id: string, reason: string, ctx: AuditContext): Promise<ExpenseEntryItem> {
@@ -677,54 +739,67 @@ export class ExpensesService {
     const trimmedReason = reason.trim();
     if (!trimmedReason) throw new BadRequestException('Rejection reason is required');
 
-    const [before] = await this.db.select().from(expenseEntries).where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)));
-    if (!before) throw new NotFoundException('Expense entry not found');
+    return this.db.transaction(async (tx) => {
+      const client = tx as NodePgDatabase<Schema>;
+      const [before] = await tx
+        .select()
+        .from(expenseEntries)
+        .where(and(eq(expenseEntries.id, id), isNull(expenseEntries.deletedAt)))
+        .for('update');
+      if (!before) throw new NotFoundException('Expense entry not found');
 
-    const rejectableStatuses = [EXPENSE_STATUS_SUBMITTED, EXPENSE_STATUS_PENDING_APPROVAL];
-    if (!rejectableStatuses.includes(before.status)) {
-      throw new BadRequestException(
-        `Only ${EXPENSE_STATUS_SUBMITTED} or ${EXPENSE_STATUS_PENDING_APPROVAL} entries can be rejected (current: ${before.status})`,
+      if (requiresGovernanceWorkflowDecision(before.status, await this.hasActiveExpenseApprovalRequest(id, client))) {
+        throw new ConflictException('Expense entry must be rejected through the active governance workflow');
+      }
+      if (before.status !== EXPENSE_STATUS_SUBMITTED) {
+        throw new BadRequestException(
+          `Only ${EXPENSE_STATUS_SUBMITTED} entries can be rejected (current: ${before.status})`,
+        );
+      }
+
+      const [updated] = await tx
+        .update(expenseEntries)
+        .set({
+          status: EXPENSE_STATUS_REJECTED,
+          rejectionReason: trimmedReason,
+          updatedAt: new Date(),
+          updatedBy: ctx.userId,
+        })
+        .where(eq(expenseEntries.id, id))
+        .returning({
+          id: expenseEntries.id,
+          companyId: expenseEntries.companyId,
+          branchId: expenseEntries.branchId,
+          entryNumber: expenseEntries.entryNumber,
+          categoryId: expenseEntries.categoryId,
+          category: expenseEntries.category,
+          amount: expenseEntries.amount,
+          vendor: expenseEntries.vendor,
+          paymentMethod: expenseEntries.paymentMethod,
+          description: expenseEntries.description,
+          billableDepartment: expenseEntries.billableDepartment,
+          attachmentName: expenseEntries.attachmentName,
+          rejectionReason: expenseEntries.rejectionReason,
+          status: expenseEntries.status,
+          createdAt: expenseEntries.createdAt,
+        });
+      if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
+      await this.audit.log(
+        {
+          entity: 'expense_entries',
+          entityId: id,
+          action: 'reject',
+          before: before as object,
+          after: updated as object,
+          userId: ctx.userId,
+          companyId: updated.companyId,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+        client,
       );
-    }
-
-    const [updated] = await this.db
-      .update(expenseEntries)
-      .set({
-        status: EXPENSE_STATUS_REJECTED,
-        rejectionReason: trimmedReason,
-        updatedAt: new Date(),
-        updatedBy: ctx.userId,
-      })
-      .where(eq(expenseEntries.id, id))
-      .returning({
-        id: expenseEntries.id,
-        companyId: expenseEntries.companyId,
-        branchId: expenseEntries.branchId,
-        entryNumber: expenseEntries.entryNumber,
-        categoryId: expenseEntries.categoryId,
-        category: expenseEntries.category,
-        amount: expenseEntries.amount,
-        vendor: expenseEntries.vendor,
-        paymentMethod: expenseEntries.paymentMethod,
-        description: expenseEntries.description,
-        billableDepartment: expenseEntries.billableDepartment,
-        attachmentName: expenseEntries.attachmentName,
-        rejectionReason: expenseEntries.rejectionReason,
-        status: expenseEntries.status,
-        createdAt: expenseEntries.createdAt,
-      });
-    if (!updated) throw new InternalServerErrorException('Failed to update expense entry');
-    await this.audit.log({
-      entity: 'expense_entries',
-      entityId: id,
-      action: 'reject',
-      before: before as object,
-      after: updated as object,
-      userId: ctx.userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
+      return updated;
     });
-    return updated;
   }
 
   async topupPettyCash(dto: CreatePettyCashTxDto, ctx: AuditContext): Promise<PettyCashLedgerItem> {
@@ -785,54 +860,65 @@ export class ExpensesService {
     dto: CreatePettyCashTxDto,
     ctx: AuditContext,
   ): Promise<PettyCashLedgerItem> {
+    return this.db.transaction(async (tx) => {
+      return this.insertPettyCashLedgerEntry(txType, dto, ctx, tx as NodePgDatabase<Schema>);
+    });
+  }
+
+  private async insertPettyCashLedgerEntry(
+    txType: 'topup' | 'spend',
+    dto: CreatePettyCashTxDto,
+    ctx: AuditContext,
+    tx: NodePgDatabase<Schema>,
+  ): Promise<PettyCashLedgerItem> {
     const amount = Number(dto.amount);
     if (!(amount > 0)) throw new BadRequestException('Amount must be greater than zero');
 
-    return this.db.transaction(async (tx) => {
-      const balance = await this.getPettyCashBalance(dto.companyId, dto.branchId, tx as NodePgDatabase<Schema>);
-      const nextBalance = txType === TX_TOPUP ? balance + amount : balance - amount;
-      if (nextBalance < 0) throw new ConflictException('Insufficient petty cash balance');
+    await this.lockPettyCashBranch(tx, dto.companyId, dto.branchId);
+    const balance = await this.getPettyCashBalance(dto.companyId, dto.branchId, tx);
+    const nextBalance = txType === TX_TOPUP ? balance + amount : balance - amount;
+    if (nextBalance < 0) throw new ConflictException('Insufficient petty cash balance');
 
-      const [inserted] = await tx
-        .insert(pettyCashLedger)
-        .values({
-          companyId: dto.companyId,
-          branchId: dto.branchId,
-          transactionType: txType,
-          amount: String(amount.toFixed(2)),
-          category: dto.category?.trim() || null,
-          notes: dto.notes.trim(),
-          balanceAfter: String(nextBalance.toFixed(2)),
-          createdBy: ctx.userId,
-          updatedBy: ctx.userId,
-        })
-        .returning({
-          id: pettyCashLedger.id,
-          companyId: pettyCashLedger.companyId,
-          branchId: pettyCashLedger.branchId,
-          transactionType: pettyCashLedger.transactionType,
-          amount: pettyCashLedger.amount,
-          category: pettyCashLedger.category,
-          notes: pettyCashLedger.notes,
-          balanceAfter: pettyCashLedger.balanceAfter,
-          createdAt: pettyCashLedger.createdAt,
-        });
-      if (!inserted) throw new InternalServerErrorException('Failed to insert petty cash ledger entry');
+    const [inserted] = await tx
+      .insert(pettyCashLedger)
+      .values({
+        companyId: dto.companyId,
+        branchId: dto.branchId,
+        transactionType: txType,
+        amount: String(amount.toFixed(2)),
+        category: dto.category?.trim() || null,
+        notes: dto.notes.trim(),
+        balanceAfter: String(nextBalance.toFixed(2)),
+        createdBy: ctx.userId,
+        updatedBy: ctx.userId,
+      })
+      .returning({
+        id: pettyCashLedger.id,
+        companyId: pettyCashLedger.companyId,
+        branchId: pettyCashLedger.branchId,
+        transactionType: pettyCashLedger.transactionType,
+        amount: pettyCashLedger.amount,
+        category: pettyCashLedger.category,
+        notes: pettyCashLedger.notes,
+        balanceAfter: pettyCashLedger.balanceAfter,
+        createdAt: pettyCashLedger.createdAt,
+      });
+    if (!inserted) throw new InternalServerErrorException('Failed to insert petty cash ledger entry');
 
-      await this.audit.log(
-        {
-          entity: 'petty_cash_ledger',
-          entityId: inserted.id,
-          action: txType,
-          after: inserted as object,
-          userId: ctx.userId,
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
-        },
-        tx as NodePgDatabase<Schema>,
-      );
-      return inserted;
-    });
+    await this.audit.log(
+      {
+        entity: 'petty_cash_ledger',
+        entityId: inserted.id,
+        action: txType,
+        after: inserted as object,
+        userId: ctx.userId,
+        companyId: inserted.companyId,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      },
+      tx,
+    );
+    return inserted;
   }
 
   private async getPettyCashBalance(
@@ -857,6 +943,85 @@ export class ExpensesService {
     const topup = Number(row?.topup ?? 0);
     const spend = Number(row?.spend ?? 0);
     return Math.round((topup - spend) * 100) / 100;
+  }
+
+  private async assertExpenseScope(
+    companyId: string,
+    branchId: string,
+    categoryId?: string | null,
+  ): Promise<void> {
+    await this.assertBranchInCompany(companyId, branchId);
+    if (categoryId) {
+      await this.assertCategoryInScope(categoryId, companyId, branchId);
+    }
+  }
+
+  private async assertBranchInCompany(
+    companyId: string,
+    branchId: string,
+    tx?: NodePgDatabase<Schema>,
+  ): Promise<void> {
+    const client = tx ?? this.db;
+    const [branch] = await client
+      .select({ id: branches.id })
+      .from(branches)
+      .where(and(eq(branches.id, branchId), eq(branches.companyId, companyId), isNull(branches.deletedAt)));
+    if (!branch) throw new BadRequestException('Branch does not belong to company');
+  }
+
+  private async assertCategoryInScope(
+    categoryId: string,
+    companyId: string,
+    branchId: string,
+    tx?: NodePgDatabase<Schema>,
+  ): Promise<void> {
+    const client = tx ?? this.db;
+    const [category] = await client
+      .select({ id: expenseCategories.id })
+      .from(expenseCategories)
+      .where(
+        and(
+          eq(expenseCategories.id, categoryId),
+          eq(expenseCategories.companyId, companyId),
+          eq(expenseCategories.branchId, branchId),
+          eq(expenseCategories.status, 'active'),
+          isNull(expenseCategories.deletedAt),
+        ),
+      );
+    if (!category) throw new BadRequestException('Expense category is not active in this branch/company scope');
+  }
+
+  private async hasActiveExpenseApprovalRequest(
+    expenseEntryId: string,
+    tx?: NodePgDatabase<Schema>,
+  ): Promise<boolean> {
+    const client = tx ?? this.db;
+    const [request] = await client
+      .select({ id: approvalRequests.id })
+      .from(approvalRequests)
+      .where(
+        and(
+          eq(approvalRequests.entityType, 'expense_entry'),
+          eq(approvalRequests.entityId, expenseEntryId),
+          eq(approvalRequests.actionType, 'approve'),
+          or(eq(approvalRequests.status, 'draft'), eq(approvalRequests.status, 'submitted')),
+          isNull(approvalRequests.deletedAt),
+        ),
+      );
+    return !!request;
+  }
+
+  private async lockPettyCashBranch(
+    tx: NodePgDatabase<Schema>,
+    companyId: string,
+    branchId: string,
+  ): Promise<void> {
+    const [branch] = await tx
+      .select({ id: branches.id })
+      .from(branches)
+      .where(and(eq(branches.id, branchId), eq(branches.companyId, companyId), isNull(branches.deletedAt)))
+      .for('update');
+    if (!branch) throw new BadRequestException('Branch does not belong to company');
   }
 
   private async assertManager(userId: string): Promise<void> {

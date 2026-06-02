@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { JwtPayloadUser } from '../../modules/auth/decorators/current-user.decorator';
+import { extractTenantScope } from '../helpers/scope.helper';
 
 @Injectable()
 export class TenantInterceptor implements NestInterceptor {
@@ -30,13 +31,8 @@ export class TenantInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const permittedCompanyIds = [
-      ...new Set(
-        (user.permissions ?? [])
-          ?.map((p) => p.match(/^company:([0-9a-fA-F-]{36})$/)?.[1])
-          .filter(Boolean) as string[],
-      ),
-    ];
+    const tenantScope = extractTenantScope(user.permissions ?? []);
+    const permittedCompanyIds = tenantScope.companyIds;
     const requestedCompanyIds = [
       request.params?.companyId,
       request.body?.companyId,
@@ -60,26 +56,7 @@ export class TenantInterceptor implements NestInterceptor {
       }
     }
 
-    // Implicitly scope queries to the user's ONLY tenant if not explicitly provided
-    if (permittedCompanyIds.length === 1) {
-      if (
-        request.body &&
-        typeof request.body === 'object' &&
-        !request.body.companyId &&
-        request.method !== 'GET' &&
-        request.method !== 'DELETE'
-      ) {
-        request.body.companyId = permittedCompanyIds[0];
-      }
-      if (
-        request.query &&
-        typeof request.query === 'object' &&
-        !request.query.companyId &&
-        request.method === 'GET'
-      ) {
-        request.query.companyId = permittedCompanyIds[0];
-      }
-    }
+    request.tenantScope = tenantScope;
 
     return next.handle();
   }

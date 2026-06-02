@@ -1,4 +1,5 @@
-import { index, numeric, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import { index, numeric, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { auditColumns } from '../shared';
 import { stations } from '../core/stations';
 import { branches } from '../core/branches';
@@ -45,5 +46,8 @@ export const shifts = pgTable(
     index('shifts_status_idx').on(t.status),
     index('shifts_start_time_idx').on(t.startTime),
     index('shifts_company_branch_start_time_idx').on(t.companyId, t.branchId, t.startTime),
+    uniqueIndex('shifts_one_open_per_branch_unique')
+      .on(t.branchId)
+      .where(sql`${t.status} = 'open' AND ${t.deletedAt} IS NULL`),
   ],
 );

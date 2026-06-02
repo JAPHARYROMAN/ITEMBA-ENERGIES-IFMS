@@ -36,7 +36,7 @@ export class ReportsController {
     const payload = await this.reportsService.getOverview(query, {
       endpoint: '/reports/overview',
       correlationId: (req as Request & { id?: string }).id ?? 'n/a',
-      scope: this.getScope(user, query),
+      scope: this.getScope(user),
     });
     return this.respondWithEtag(req, res, payload);
   }
@@ -56,7 +56,7 @@ export class ReportsController {
     const payload = await this.reportsService.getDailyOperations(query, {
       endpoint: '/reports/daily-operations',
       correlationId: (req as Request & { id?: string }).id ?? 'n/a',
-      scope: this.getScope(user, query),
+      scope: this.getScope(user),
     });
     return this.respondWithEtag(req, res, payload);
   }
@@ -76,7 +76,7 @@ export class ReportsController {
     const payload = await this.reportsService.getStockLoss(query, {
       endpoint: '/reports/stock-loss',
       correlationId: (req as Request & { id?: string }).id ?? 'n/a',
-      scope: this.getScope(user, query),
+      scope: this.getScope(user),
     });
     return this.respondWithEtag(req, res, payload);
   }
@@ -96,7 +96,7 @@ export class ReportsController {
     const payload = await this.reportsService.getProfitability(query, {
       endpoint: '/reports/profitability',
       correlationId: (req as Request & { id?: string }).id ?? 'n/a',
-      scope: this.getScope(user, query),
+      scope: this.getScope(user),
     });
     return this.respondWithEtag(req, res, payload);
   }
@@ -116,7 +116,7 @@ export class ReportsController {
     const payload = await this.reportsService.getCreditCashflow(query, {
       endpoint: '/reports/credit-cashflow',
       correlationId: (req as Request & { id?: string }).id ?? 'n/a',
-      scope: this.getScope(user, query),
+      scope: this.getScope(user),
     });
     return this.respondWithEtag(req, res, payload);
   }
@@ -136,7 +136,7 @@ export class ReportsController {
     const payload = await this.reportsService.getStationComparison(query, {
       endpoint: '/reports/station-comparison',
       correlationId: (req as Request & { id?: string }).id ?? 'n/a',
-      scope: this.getScope(user, query),
+      scope: this.getScope(user),
     });
     return this.respondWithEtag(req, res, payload);
   }
@@ -183,21 +183,19 @@ export class ReportsController {
       .join(',')}}`;
   }
 
-  private getScope(user: JwtPayloadUser, query: ReportsQueryDto): ReportScopeContext {
+  private getScope(user: JwtPayloadUser): ReportScopeContext {
     const scoped = this.parsePermissionScope(user.permissions);
     return {
       userId: user.sub,
       permissions: user.permissions,
-      companyId: query.companyId ?? scoped.companyId,
-      branchId: query.branchId ?? scoped.branchId,
+      companyId: scoped.companyIds[0],
+      branchId: scoped.branchIds[0],
+      companyIds: scoped.companyIds,
+      branchIds: scoped.branchIds,
     };
   }
 
-  private parsePermissionScope(permissions: string[]): { companyId?: string; branchId?: string } {
-    const { companyIds, branchIds } = extractTenantScope(permissions);
-    return {
-      companyId: companyIds[0],
-      branchId: branchIds[0],
-    };
+  private parsePermissionScope(permissions: string[]): { companyIds: string[]; branchIds: string[] } {
+    return extractTenantScope(permissions);
   }
 }

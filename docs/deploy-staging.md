@@ -1,8 +1,9 @@
 # Staging Deployment Guide (Docker Compose)
 
-This guide deploys IFMS staging with four containers:
+This guide deploys IFMS staging with five containers:
 
 - `postgres`
+- `db-backup`
 - `api`
 - `web`
 - `nginx` (reverse proxy)
@@ -24,6 +25,7 @@ Edit `apps/api/.env.staging` and replace placeholders:
 - `DATABASE_URL`
 - `JWT_ACCESS_SECRET`
 - `JWT_REFRESH_SECRET`
+- `SWAGGER_BASIC_USER`
 - `SWAGGER_BASIC_PASS`
 - `FRONTEND_ORIGIN`
 
@@ -67,17 +69,21 @@ Container health checks are wired for all services:
 
 - `postgres`: `pg_isready`
 - `api`: `GET /health/live`
-- `web`: HTTP check on port `4173`
+- `web`: `GET /health` on port `80`
 - `nginx`: `GET /nginx-health`
 
 Manual probes (from your workstation):
 
 ```bash
 curl -i http://<staging-host>/nginx-health
-curl -i http://<staging-host>/api/health/live
+curl -i http://<staging-host>/health/live
+curl -i http://<staging-host>/health/ready
 curl -i http://<staging-host>/
 curl -i http://<staging-host>/docs
+curl -i http://<staging-host>/api/docs
 ```
+
+`/health/ready` returns `503` when the API cannot reach Postgres.
 
 ## 5) Routing behavior
 
@@ -85,7 +91,9 @@ The staging proxy routes:
 
 - `/` -> `web`
 - `/api` -> `api`
-- `/docs` -> API Swagger (staging only)
+- `/health/live` and `/health/ready` -> API health probes
+- `/public/report/*` -> API public report verification
+- `/docs` and `/api/docs` -> API Swagger (staging only; basic-auth protected because the API image runs with `NODE_ENV=production`)
 
 Config file: `nginx.conf`
 
@@ -108,7 +116,23 @@ Then restart API:
 docker compose -f docker-compose.staging.yml up -d api
 ```
 
-## 7) SSL-ready notes (without hardcoded certs)
+## 7) Smoke tests
+
+For reverse-proxy staging:
+
+```bash
+bash scripts/smoke-test.sh "http://<staging-host>" "true"
+```
+
+By default, the staging Swagger check expects `/api/docs` to return `401`, proving docs are protected. To verify authenticated Swagger access instead:
+
+```bash
+SMOKE_SWAGGER_USER='<docs-user>' \
+SMOKE_SWAGGER_PASS='<docs-password>' \
+bash scripts/smoke-test.sh "http://<staging-host>" "true"
+```
+
+## 8) SSL-ready notes (without hardcoded certs)
 
 This skeleton is HTTP-only by default. For TLS:
 
@@ -117,7 +141,7 @@ This skeleton is HTTP-only by default. For TLS:
 3. Keep cert/key paths configurable by deployment tooling.
 4. Redirect port 80 to 443 once TLS is active.
 
-## 8) Update / rollback commands
+## 9) Update / rollback commands
 
 Redeploy with rebuild:
 

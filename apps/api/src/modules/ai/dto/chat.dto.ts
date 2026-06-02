@@ -66,12 +66,15 @@ export class ChatRequestDto {
 export type ConfirmAction = 'create_delivery' | 'create_expense' | 'record_payment' | 'void_sale';
 
 export class ConfirmWriteDto {
-  @ApiProperty({ enum: ['create_delivery', 'create_expense', 'record_payment'] })
+  @ApiProperty({ enum: ['create_delivery', 'create_expense', 'record_payment', 'void_sale'] })
   @IsString()
   @IsIn(['create_delivery', 'create_expense', 'record_payment', 'void_sale'])
   action: ConfirmAction;
 
-  @ApiProperty({ description: 'Payload fields for the write operation' })
+  @ApiProperty({
+    description:
+      'Payload fields for the write operation. Any companyId or branchId values, including nested values, must be within the current user tenant scope.',
+  })
   @IsObject()
   payload: Record<string, unknown>;
 }

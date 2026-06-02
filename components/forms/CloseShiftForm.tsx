@@ -149,6 +149,7 @@ export const CloseShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => v
     mutationFn: (data: CloseShiftFormData) => shiftRepo.close(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      queryClient.invalidateQueries({ queryKey: ['active-shift', stationId] });
       addToast(t('forms.saveSuccess', { entity: 'Shift' }), 'success');
       onSuccess();
     },

@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, desc, eq, isNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lte, sql, type SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
@@ -27,7 +27,7 @@ import {
 } from '../../database/schema/exports/exports';
 import type { JwtPayloadUser } from '../auth/decorators/current-user.decorator';
 import type { CreateExportDto } from './dto/create-export.dto';
-import { extractTenantScope } from '../../common/helpers/scope.helper';
+import { hasTenantScope, mergeTenantScope } from '../../common/helpers/scope.helper';
 import type { ListExportsQueryDto } from './dto/list-exports-query.dto';
 import type { ExportAuditContext, ExportPipelineStage, ExportScope, ExportSignatureSummary } from './exports.types';
 import { ExportsRendererService } from './exports.renderer.service';
@@ -44,20 +44,10 @@ export class ExportsService {
 
   async createExport(dto: CreateExportDto, user: JwtPayloadUser, audit?: ExportAuditContext) {
     const scope = this.parseScope(user);
-    const requestedCompany = this.getStringParam(dto.params, 'companyId') ?? scope.companyId;
-    const requestedBranch = this.getStringParam(dto.params, 'branchId') ?? scope.branchId;
-
-    if (!requestedCompany) {
-      throw new BadRequestException('companyId is required in params or permission scope.');
-    }
-
-    if (scope.companyId && scope.companyId !== requestedCompany) {
-      throw new ForbiddenException('Requested company is outside your access scope.');
-    }
-
-    if (scope.branchId && requestedBranch && scope.branchId !== requestedBranch) {
-      throw new ForbiddenException('Requested branch is outside your access scope.');
-    }
+    const requestedScope = this.resolveCreateScope(scope, {
+      companyId: this.getStringParam(dto.params, 'companyId'),
+      branchId: this.getStringParam(dto.params, 'branchId'),
+    });
 
     const verificationToken = randomBytes(32).toString('hex');
     const expiresHours = this.config.get<number>('EXPORT_EXPIRES_HOURS', 72);
@@ -70,13 +60,15 @@ export class ExportsService {
       const [row] = await tx
         .insert(exportsTable)
         .values({
-          companyId: requestedCompany,
-          branchId: requestedBranch ?? null,
+          companyId: requestedScope.companyId,
+          branchId: requestedScope.branchId ?? null,
           userId: user.sub,
           exportType: dto.exportType,
           format: dto.format,
           paramsJson: {
             ...(dto.params ?? {}),
+            companyId: requestedScope.companyId,
+            ...(requestedScope.branchId ? { branchId: requestedScope.branchId } : {}),
             _clientContext: dto.clientContext ?? {},
           },
           verificationToken,
@@ -105,12 +97,15 @@ export class ExportsService {
 
   async listExports(user: JwtPayloadUser, query: ListExportsQueryDto) {
     const limit = query.limit ?? 20;
-    const scope = this.parseScope(user);
+    const accessPredicate = this.buildExportAccessPredicate(user, {
+      companyId: query.companyId,
+      branchId: query.branchId,
+    });
 
     const rows = await this.db
       .select()
       .from(exportsTable)
-      .where(this.buildListScopePredicate(user, scope))
+      .where(accessPredicate)
       .orderBy(desc(exportsTable.createdAt))
       .limit(limit);
 
@@ -419,6 +414,8 @@ export class ExportsService {
         permissions: [],
         companyId: exportRow.companyId,
         branchId: exportRow.branchId ?? undefined,
+        companyIds: [exportRow.companyId],
+        branchIds: exportRow.branchId ? [exportRow.branchId] : [],
       },
       createdAt: exportRow.createdAt,
     });
@@ -689,7 +686,7 @@ export class ExportsService {
     const locked = await this.db
       .update(exportOutbox)
       .set({ lockedAt: now, lockedBy: workerId })
-      .where(and(sql`${exportOutbox.id} = ANY(${ids})`, isNull(exportOutbox.lockedAt)))
+      .where(and(inArray(exportOutbox.id, ids), isNull(exportOutbox.lockedAt)))
       .returning({ id: exportOutbox.id });
 
     return locked.map((l) => l.id);
@@ -809,61 +806,112 @@ export class ExportsService {
     });
   }
 
-  private buildListScopePredicate(user: JwtPayloadUser, scope: ExportScope) {
-    const managerBranchAccess = user.permissions.includes('reports:refresh');
-    if (!managerBranchAccess) {
-      return eq(exportsTable.userId, user.sub);
-    }
-
-    if (scope.branchId) {
-      if (!scope.companyId) {
-        return eq(exportsTable.branchId, scope.branchId);
-      }
-      return and(eq(exportsTable.branchId, scope.branchId), eq(exportsTable.companyId, scope.companyId));
-    }
-
-    if (scope.companyId) {
-      return eq(exportsTable.companyId, scope.companyId);
-    }
-
-    return eq(exportsTable.userId, user.sub);
-  }
-
   private async getExportForUser(user: JwtPayloadUser, exportId: string) {
-    const scope = this.parseScope(user);
-    const managerBranchAccess = user.permissions.includes('reports:refresh');
-
+    const accessPredicate = this.buildExportAccessPredicate(user);
     const [row] = await this.db
       .select()
       .from(exportsTable)
-      .where(eq(exportsTable.id, exportId))
+      .where(and(eq(exportsTable.id, exportId), accessPredicate))
       .limit(1);
 
     if (!row) throw new NotFoundException('Export not found');
+    return row;
+  }
 
-    if (row.userId === user.sub) return row;
+  private buildExportAccessPredicate(
+    user: JwtPayloadUser,
+    requested?: { companyId?: string; branchId?: string },
+  ) {
+    const scope = this.parseScope(user);
+    const conditions = this.buildTenantConditions(scope, requested);
+    const managerBranchAccess = user.permissions.includes('reports:refresh');
+    if (!managerBranchAccess) {
+      conditions.push(eq(exportsTable.userId, user.sub));
+    }
+    return and(...conditions);
+  }
 
-    if (managerBranchAccess) {
-      if (scope.companyId && row.companyId !== scope.companyId) {
-        throw new ForbiddenException('Export outside your company scope.');
-      }
-      if (scope.branchId && row.branchId !== scope.branchId) {
-        throw new ForbiddenException('Export outside your branch scope.');
-      }
-      return row;
+  private buildTenantConditions(
+    scope: ExportScope,
+    requested?: { companyId?: string; branchId?: string },
+  ) {
+    if (!hasTenantScope(scope)) {
+      throw new ForbiddenException('No tenant scopes are assigned to this account');
     }
 
-    throw new ForbiddenException('You can only access your own exports.');
+    if (requested?.companyId && !(scope.companyIds ?? []).includes(requested.companyId)) {
+      throw new ForbiddenException(`Access to company ${requested.companyId} is strictly forbidden`);
+    }
+
+    if (requested?.branchId && !(scope.branchIds ?? []).includes(requested.branchId)) {
+      throw new ForbiddenException('You do not have access to the requested branch');
+    }
+
+    const conditions: SQL[] = [];
+    if (requested?.companyId) {
+      conditions.push(eq(exportsTable.companyId, requested.companyId));
+    } else if (scope.companyIds?.length === 1) {
+      conditions.push(eq(exportsTable.companyId, scope.companyIds[0]));
+    } else if (scope.companyIds?.length) {
+      conditions.push(inArray(exportsTable.companyId, scope.companyIds));
+    }
+
+    if (requested?.branchId) {
+      conditions.push(eq(exportsTable.branchId, requested.branchId));
+    } else if (scope.branchIds?.length === 1) {
+      conditions.push(eq(exportsTable.branchId, scope.branchIds[0]));
+    } else if (scope.branchIds?.length) {
+      conditions.push(inArray(exportsTable.branchId, scope.branchIds));
+    }
+
+    return conditions;
+  }
+
+  private resolveCreateScope(
+    scope: ExportScope,
+    requested: { companyId?: string; branchId?: string },
+  ): { companyId: string; branchId?: string } {
+    if (!hasTenantScope(scope)) {
+      throw new ForbiddenException('No tenant scopes are assigned to this account');
+    }
+
+    if (requested.companyId && !(scope.companyIds ?? []).includes(requested.companyId)) {
+      throw new ForbiddenException(`Access to company ${requested.companyId} is strictly forbidden`);
+    }
+
+    if (requested.branchId && !(scope.branchIds ?? []).includes(requested.branchId)) {
+      throw new ForbiddenException('You do not have access to the requested branch');
+    }
+
+    const companyId = requested.companyId ?? this.inferSingleScopeId(scope.companyIds, 'companyId');
+    const branchId = requested.branchId ?? this.inferSingleScopeId(scope.branchIds, 'branchId', false);
+    if (!companyId) {
+      throw new BadRequestException('companyId is required when multiple company scopes are assigned.');
+    }
+    if (!branchId && (scope.branchIds?.length ?? 0) > 1) {
+      throw new BadRequestException('branchId is required when multiple branch scopes are assigned.');
+    }
+
+    return { companyId, branchId };
+  }
+
+  private inferSingleScopeId(ids: string[] | undefined, label: string, required = true): string | undefined {
+    if (ids?.length === 1) return ids[0];
+    if (required && ids?.length === 0) {
+      throw new BadRequestException(`${label} is required in params or permission scope.`);
+    }
+    return undefined;
   }
 
   private parseScope(user: JwtPayloadUser): ExportScope {
-    const { companyIds, branchIds } = extractTenantScope(user.permissions);
-
+    const { companyIds, branchIds } = mergeTenantScope({ permissions: user.permissions });
     return {
       userId: user.sub,
       permissions: user.permissions,
       companyId: companyIds[0],
       branchId: branchIds[0],
+      companyIds,
+      branchIds,
     };
   }
 

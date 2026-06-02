@@ -73,12 +73,12 @@ describe('ShiftsService', () => {
       const existingShiftRow = [existingOpenShift];
       let whereCallCount = 0;
       const tx = {
+        execute: jest.fn().mockResolvedValue({ rows: branchRow }),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnValue({
             where: jest.fn().mockImplementation(() => {
               whereCallCount += 1;
-              if (whereCallCount === 1) return Promise.resolve(branchRow);
-              if (whereCallCount === 2) return Promise.resolve(stationRow);
+              if (whereCallCount === 1) return Promise.resolve(stationRow);
               return Promise.resolve(existingShiftRow);
             }),
           }),
@@ -120,13 +120,13 @@ describe('ShiftsService', () => {
       };
       let selectCallCount = 0;
       const tx = {
+        execute: jest.fn().mockResolvedValue({ rows: [{ id: branchId, stationId }] }),
         select: jest.fn().mockImplementation(() => ({
           from: jest.fn().mockImplementation(() => ({
             where: jest.fn().mockImplementation(() => {
               selectCallCount++;
-              if (selectCallCount === 1) return Promise.resolve([{ id: branchId, stationId }]);
-              if (selectCallCount === 2) return Promise.resolve([{ id: stationId, companyId }]);
-              if (selectCallCount === 3) return Promise.resolve([]);
+              if (selectCallCount === 1) return Promise.resolve([{ id: stationId, companyId }]);
+              if (selectCallCount === 2) return Promise.resolve([]);
               return Promise.resolve([]);
             }),
           })),
@@ -153,6 +153,7 @@ describe('ShiftsService', () => {
 
     it('should throw NotFoundException when branch not found', async () => {
       const tx = {
+        execute: jest.fn().mockResolvedValue({ rows: [] }),
         select: jest.fn().mockReturnValue({
           from: jest.fn().mockReturnValue({
             where: jest.fn().mockResolvedValue([]),

@@ -4,7 +4,7 @@ This runbook covers staging-ready operations essentials:
 
 - Daily PostgreSQL backups with retention
 - Controlled restore drill procedure
-- Monitoring hooks (`/ops/metrics`)
+- Monitoring hooks (`/api/ops/metrics`)
 - Slow report query alert logging
 
 ## 1) Database Backups (Staging)
@@ -54,14 +54,14 @@ PGHOST=postgres PGPORT=5432 PGUSER=ifms PGPASSWORD='<redacted>' PGDATABASE=ifms_
 3. Set `CONFIRM_DB_RESTORE=YES_RESTORE`.
 4. Run restore.
 5. Validate:
-   - `GET /api/health/ready`
+   - `GET /health/ready`
    - business smoke checks
 
 ## 3) Monitoring Hooks
 
 ### Ops metrics endpoint
 
-- Endpoint: `GET /ops/metrics`
+- Endpoint: `GET /api/ops/metrics`
 - Scope: staging only (controlled by env)
 - Enable with: `OPS_METRICS_ENABLED=true`
 
@@ -112,5 +112,7 @@ curl -s http://<staging-host>/api/ops/metrics | jq
 Check readiness:
 
 ```bash
-curl -i http://<staging-host>/api/health/ready
+curl -i http://<staging-host>/health/ready
 ```
+
+`/health/ready` returns `503` when the API cannot reach Postgres.

@@ -144,15 +144,15 @@ export const NAV_ITEMS: SidebarItem[] = [
         name: "Tank to Tank",
         icon: Layers,
         path: "/app/transfers/tank-to-tank",
-        permissions: ["transfers:write"],
+        permissions: ["transfers:read", "transfers:write"],
       },
       {
         name: "Station to Station",
         icon: Building2,
         path: "/app/transfers/station-to-station",
-        permissions: ["transfers:write"],
+        permissions: ["transfers:read", "transfers:write"],
       },
-      { name: "Adjustments", icon: Scale, path: "/app/transfers/adjustments", permissions: ["adjustments:write"] },
+      { name: "Adjustments", icon: Scale, path: "/app/transfers/adjustments", permissions: ["adjustments:read", "adjustments:write"] },
     ],
   },
 

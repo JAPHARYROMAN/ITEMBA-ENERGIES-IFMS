@@ -32,3 +32,8 @@ export class ReportsQueryDto {
   @IsUUID()
   productId?: string;
 }
+
+export interface ScopedReportsQuery extends ReportsQueryDto {
+  companyIds?: string[];
+  branchIds?: string[];
+}

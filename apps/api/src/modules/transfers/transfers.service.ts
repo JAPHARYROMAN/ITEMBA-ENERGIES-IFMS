@@ -30,6 +30,7 @@ const TRANSFER_TYPE_TANK_TO_TANK = 'tank_to_tank';
 const TRANSFER_TYPE_STATION_TO_STATION = 'station_to_station';
 
 interface RawTankRow {
+  [key: string]: unknown;
   id: string;
   branchId: string;
   productId: string | null;
@@ -182,8 +183,7 @@ export class TransfersService {
           fromTank.productId &&
           toTank.productId
         ) {
-          // Optional: enforce same product for cross-station
-          // Currently allow different products if needed
+          throw new BadRequestException('Transfers cannot mix products between tanks');
         }
       },
       ctx,
@@ -218,17 +218,17 @@ export class TransfersService {
     const transferDate = transferDateStr ? new Date(transferDateStr) : new Date();
 
     const [inserted] = await this.db.transaction(async (tx) => {
-      // Lock both tank rows inside the transaction to prevent concurrent overdraw
-      const fromResult = await tx.execute(
+      // Lock tank rows in deterministic order to avoid transfer deadlocks.
+      const tankResult = await tx.execute<RawTankRow>(
         sql`SELECT id, branch_id AS "branchId", product_id AS "productId", capacity, current_level AS "currentLevel"
-            FROM tanks WHERE id = ${fromTankId} AND deleted_at IS NULL FOR UPDATE`,
+            FROM tanks
+            WHERE id = ANY(${[fromTankId, toTankId]}::uuid[]) AND deleted_at IS NULL
+            ORDER BY id
+            FOR UPDATE`,
       );
-      const [fromTankRow] = fromResult.rows as unknown as RawTankRow[];
-      const toResult = await tx.execute(
-        sql`SELECT id, branch_id AS "branchId", product_id AS "productId", capacity, current_level AS "currentLevel"
-            FROM tanks WHERE id = ${toTankId} AND deleted_at IS NULL FOR UPDATE`,
-      );
-      const [toTankRow] = toResult.rows as unknown as RawTankRow[];
+      const tankById = new Map(tankResult.rows.map((tank) => [tank.id, tank]));
+      const fromTankRow = tankById.get(fromTankId);
+      const toTankRow = tankById.get(toTankId);
 
       if (!fromTankRow) throw new NotFoundException('From tank not found');
       if (!toTankRow) throw new NotFoundException('To tank not found');
@@ -250,6 +250,7 @@ export class TransfersService {
       if (!toTank.stationId) throw new NotFoundException('To tank station not found');
 
       validate(fromTank, toTank);
+      this.assertSameTransferProduct(fromTank, toTank);
 
       const fromCurrent = Number(fromTankRow.currentLevel || 0);
       if (quantity > fromCurrent) {
@@ -308,7 +309,7 @@ export class TransfersService {
       await tx
         .update(tanks)
         .set({
-          currentLevel: String((fromCurrent - quantity).toFixed(3)),
+          currentLevel: sql`(${tanks.currentLevel} - ${qtyStr}::numeric)`,
           updatedAt: transferDate,
           updatedBy: ctx.userId,
         })
@@ -316,7 +317,7 @@ export class TransfersService {
       await tx
         .update(tanks)
         .set({
-          currentLevel: String((toCurrent + quantity).toFixed(3)),
+          currentLevel: sql`(${tanks.currentLevel} + ${qtyStr}::numeric)`,
           updatedAt: transferDate,
           updatedBy: ctx.userId,
         })
@@ -375,6 +376,18 @@ export class TransfersService {
 
     if (!inserted) throw new InternalServerErrorException('Transfer insert failed');
     return inserted;
+  }
+
+  private assertSameTransferProduct(
+    fromTank: { productId: string | null },
+    toTank: { productId: string | null },
+  ): void {
+    if (!fromTank.productId || !toTank.productId) {
+      throw new BadRequestException('Both tanks must have a configured product before transfer');
+    }
+    if (fromTank.productId !== toTank.productId) {
+      throw new BadRequestException('Transfers cannot mix products between tanks');
+    }
   }
 
   async updateTransfer(id: string, dto: UpdateTransferDto, ctx: AuditContext): Promise<TransferItem> {
@@ -438,17 +451,16 @@ export class TransfersService {
         throw new BadRequestException('Invalid transfer record cannot be reversed');
       }
 
-      // Lock tank rows to prevent concurrent modifications
-      const fromDeleteResult = await tx.execute(
-        sql`SELECT id, current_level AS "currentLevel", product_id AS "productId", branch_id AS "branchId"
-            FROM tanks WHERE id = ${tr.fromTankId} FOR UPDATE`,
+      const tankResult = await tx.execute<RawTankRow>(
+        sql`SELECT id, current_level AS "currentLevel", product_id AS "productId", branch_id AS "branchId", capacity
+            FROM tanks
+            WHERE id = ANY(${[tr.fromTankId, tr.toTankId]}::uuid[])
+            ORDER BY id
+            FOR UPDATE`,
       );
-      const [fromTankRow] = fromDeleteResult.rows as unknown as RawTankRow[];
-      const toDeleteResult = await tx.execute(
-        sql`SELECT id, current_level AS "currentLevel", product_id AS "productId", branch_id AS "branchId"
-            FROM tanks WHERE id = ${tr.toTankId} FOR UPDATE`,
-      );
-      const [toTankRow] = toDeleteResult.rows as unknown as RawTankRow[];
+      const tankById = new Map(tankResult.rows.map((tank) => [tank.id, tank]));
+      const fromTankRow = tankById.get(tr.fromTankId);
+      const toTankRow = tankById.get(tr.toTankId);
 
       if (!fromTankRow || !toTankRow)
         throw new NotFoundException('One or more associated tanks not found');
@@ -469,7 +481,7 @@ export class TransfersService {
       await tx
         .update(tanks)
         .set({
-          currentLevel: String((fromCurrent + qty).toFixed(3)),
+          currentLevel: sql`(${tanks.currentLevel} + ${qty.toFixed(3)}::numeric)`,
           updatedAt: now,
           updatedBy: ctx.userId,
         })
@@ -478,7 +490,7 @@ export class TransfersService {
       await tx
         .update(tanks)
         .set({
-          currentLevel: String((toCurrent - qty).toFixed(3)),
+          currentLevel: sql`(${tanks.currentLevel} - ${qty.toFixed(3)}::numeric)`,
           updatedAt: now,
           updatedBy: ctx.userId,
         })

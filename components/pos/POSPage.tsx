@@ -127,6 +127,7 @@ const POSPage: React.FC = () => {
     mutationFn: (data: POSFormData) => saleRepo.create(data),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['sales'] });
+      queryClient.invalidateQueries({ queryKey: ['sales-transactions'] });
       addToast(t('posPage.saleSuccess'), 'success');
       setShowReceipt(data);
       reset();

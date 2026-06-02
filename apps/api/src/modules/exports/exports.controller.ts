@@ -17,6 +17,7 @@ import { createReadStream } from 'node:fs';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { Public } from '../auth/decorators/public.decorator';
 import { Permissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser, type JwtPayloadUser } from '../auth/decorators/current-user.decorator';
 import { CreateExportDto } from './dto/create-export.dto';
@@ -122,6 +123,7 @@ export class ExportsController {
 
 @ApiTags('public-report-verification')
 @Controller('public/report')
+@Public()
 export class PublicReportVerificationController {
   constructor(private readonly exportsService: ExportsService) {}
 

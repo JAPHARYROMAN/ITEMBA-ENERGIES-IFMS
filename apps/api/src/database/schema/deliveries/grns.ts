@@ -1,4 +1,4 @@
-import { index, numeric, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { index, numeric, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { auditColumns } from '../shared';
 import { deliveries } from './deliveries';
 
@@ -18,6 +18,7 @@ export const grns = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('posted'),
   },
   (t) => [
+    uniqueIndex('grns_delivery_id_unique').on(t.deliveryId),
     index('grns_delivery_id_idx').on(t.deliveryId),
     index('grns_created_at_idx').on(t.createdAt),
   ],

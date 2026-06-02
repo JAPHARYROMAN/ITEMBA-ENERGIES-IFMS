@@ -13,17 +13,17 @@ This runbook defines how to manage environment configuration safely for both fro
 
 ### Frontend (repo root)
 
-Tracked template/profile files:
+Tracked template files:
 
 - `.env.example` (documented baseline)
-- `.env.staging` (staging placeholders)
-- `.env.production` (production placeholders)
 
 Ignored local secret files:
 
 - `.env`
 - `.env.local`
-- `.env.*` (except the tracked templates above)
+- `.env.staging`
+- `.env.production`
+- `.env.*` (except `.env.example`)
 
 Used variables:
 
@@ -40,17 +40,17 @@ Frontend validation:
 
 ### API (`apps/api`)
 
-Tracked template/profile files:
+Tracked template files:
 
 - `.env.example` (documented baseline)
-- `.env.staging` (staging placeholders)
-- `.env.production` (production placeholders)
 
 Ignored local secret files:
 
 - `.env`
 - `.env.local`
-- `.env.*` (except tracked templates above)
+- `.env.staging`
+- `.env.production`
+- `.env.*` (except `.env.example`)
 
 API env validation:
 
@@ -61,6 +61,7 @@ Additional safeguards:
 
 - `DATABASE_URL` must be a valid `postgres://` or `postgresql://` URL.
 - `FRONTEND_ORIGIN` entries must be valid HTTP/HTTPS URLs.
+- Local API configs should include `http://localhost:3005` and `http://localhost:5173` in `FRONTEND_ORIGIN`.
 - JWT secrets must be at least 32 chars.
 - In production, placeholder secrets containing `change-me` are rejected.
 - Production startup migrations require both:
@@ -94,6 +95,8 @@ Migration commands (CI/CD controlled):
 
 - `npm run db:migrate:ci`
 - `npm run db:migrate:prod`
+- `npm run db:seed`
+- `npm run db:reset-admin`
 
 Recommended deployment order:
 
@@ -101,6 +104,8 @@ Recommended deployment order:
 2. Run `db:migrate:*` as an explicit deployment step.
 3. Start API with `start:staging` or `start:prod`.
 4. Verify health checks.
+
+Local seeded/reset admin credentials are controlled by `ADMIN_SEED_EMAIL` and `ADMIN_SEED_PASSWORD`; the committed example uses `admin@ifms.local` / `1618`.
 
 ## 5) Secret Management Checklist
 

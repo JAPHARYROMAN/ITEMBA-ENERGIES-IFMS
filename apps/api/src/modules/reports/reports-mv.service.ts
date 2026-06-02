@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DRIZZLE } from '../../database/database.module';
 import type * as schema from '../../database/schema';
-import type { ReportsQueryDto } from './dto/reports-query.dto';
+import type { ReportsQueryDto, ScopedReportsQuery } from './dto/reports-query.dto';
 
 type Schema = typeof schema;
 
@@ -19,13 +19,15 @@ export class ReportsMvService {
   /**
    * Sales trend from mv_daily_sales_summary. Returns same shape as getSalesTrend (array of { date, amount }).
    */
-  async getSalesTrendFromViews(filters: ReportsQueryDto): Promise<{ date: string; amount: number }[] | null> {
+  async getSalesTrendFromViews(filters: ScopedReportsQuery): Promise<{ date: string; amount: number }[] | null> {
     if (!canUseViewsForDateRange(filters)) return null;
     try {
       const conditions = [sql`report_date >= ${filters.dateFrom}::date`, sql`report_date <= ${filters.dateTo}::date`];
       if (filters.companyId) conditions.push(sql`company_id = ${filters.companyId}`);
+      else if (filters.companyIds?.length) conditions.push(sql`company_id IN (${this.sqlIdList(filters.companyIds)})`);
       if (filters.stationId) conditions.push(sql`station_id = ${filters.stationId}`);
       if (filters.branchId) conditions.push(sql`branch_id = ${filters.branchId}`);
+      else if (filters.branchIds?.length) conditions.push(sql`branch_id IN (${this.sqlIdList(filters.branchIds)})`);
       const where = conditions.length ? sql.join(conditions, sql` AND `) : sql`true`;
 
       const result = await this.db.execute(sql`
@@ -49,13 +51,15 @@ export class ReportsMvService {
   /**
    * Payment mix from mv_daily_payment_mix. Returns same shape as getPaymentMix (array of { name, value }).
    */
-  async getPaymentMixFromViews(filters: ReportsQueryDto): Promise<{ name: string; value: number }[] | null> {
+  async getPaymentMixFromViews(filters: ScopedReportsQuery): Promise<{ name: string; value: number }[] | null> {
     if (!canUseViewsForDateRange(filters)) return null;
     try {
       const conditions = [sql`report_date >= ${filters.dateFrom}::date`, sql`report_date <= ${filters.dateTo}::date`];
       if (filters.companyId) conditions.push(sql`company_id = ${filters.companyId}`);
+      else if (filters.companyIds?.length) conditions.push(sql`company_id IN (${this.sqlIdList(filters.companyIds)})`);
       if (filters.stationId) conditions.push(sql`station_id = ${filters.stationId}`);
       if (filters.branchId) conditions.push(sql`branch_id = ${filters.branchId}`);
+      else if (filters.branchIds?.length) conditions.push(sql`branch_id IN (${this.sqlIdList(filters.branchIds)})`);
       const where = conditions.length ? sql.join(conditions, sql` AND `) : sql`true`;
 
       const result = await this.db.execute(sql`
@@ -76,4 +80,7 @@ export class ReportsMvService {
     }
   }
 
+  private sqlIdList(ids: string[]) {
+    return sql.join(ids.map((id) => sql`${id}`), sql`, `);
+  }
 }

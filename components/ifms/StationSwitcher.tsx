@@ -20,7 +20,7 @@ export function StationSwitcher() {
   const { stationId, setFilters } = useReportsStore();
 
   const { data: stations = [] } = useQuery({
-    queryKey: ["stations-switcher"],
+    queryKey: ["stations"],
     queryFn: fetchStations,
     staleTime: 5 * 60 * 1000,
   });

@@ -24,6 +24,34 @@ type Schema = typeof schema;
 const DELIVERY_STATUS_PENDING = 'pending';
 const DELIVERY_STATUS_COMPLETED = 'completed';
 
+interface LockedDeliveryRow {
+  [key: string]: unknown;
+  id: string;
+  companyId: string;
+  branchId: string;
+  deliveryNote: string;
+  supplierId: string | null;
+  vehicleNo: string | null;
+  driverName: string | null;
+  productId: string | null;
+  orderedQty: string;
+  expectedDate: Date;
+  receivedQty: string | null;
+  density: string | null;
+  temperature: string | null;
+  status: string;
+  createdAt: Date;
+}
+
+interface LockedTankRow {
+  [key: string]: unknown;
+  id: string;
+  branchId: string;
+  productId: string | null;
+  capacity: string;
+  currentLevel: string;
+}
+
 export interface DeliveryItem {
   id: string;
   companyId: string;
@@ -295,7 +323,19 @@ export class DeliveriesService {
       0,
     );
 
-    const allocationSum = dto.allocations.reduce((s, a) => s + a.quantity, 0);
+    const allocationByTank = new Map<string, number>();
+    for (const allocation of dto.allocations) {
+      allocationByTank.set(
+        allocation.tankId,
+        (allocationByTank.get(allocation.tankId) ?? 0) + allocation.quantity,
+      );
+    }
+    const allocations = [...allocationByTank.entries()].map(([tankId, quantity]) => ({
+      tankId,
+      quantity,
+    }));
+
+    const allocationSum = allocations.reduce((s, a) => s + a.quantity, 0);
     const receivedQty = dto.receivedQty;
     if (Math.abs(allocationSum - receivedQty) > 1e-6) {
       throw new BadRequestException(
@@ -304,12 +344,32 @@ export class DeliveriesService {
     }
 
     await this.db.transaction(async (tx) => {
-      const [delivery] = await tx
-        .select()
-        .from(deliveries)
-        .where(and(eq(deliveries.id, deliveryId), isNull(deliveries.deletedAt)));
+      const [delivery] = (
+        await tx.execute<LockedDeliveryRow>(sql`
+          SELECT
+            id,
+            company_id AS "companyId",
+            branch_id AS "branchId",
+            delivery_note AS "deliveryNote",
+            supplier_id AS "supplierId",
+            vehicle_no AS "vehicleNo",
+            driver_name AS "driverName",
+            product_id AS "productId",
+            ordered_qty AS "orderedQty",
+            expected_date AS "expectedDate",
+            received_qty AS "receivedQty",
+            density,
+            temperature,
+            status,
+            created_at AS "createdAt"
+          FROM deliveries
+          WHERE id = ${deliveryId}
+            AND deleted_at IS NULL
+          FOR UPDATE
+        `)
+      ).rows;
       if (!delivery) throw new NotFoundException('Delivery not found');
-      if (delivery.status === DELIVERY_STATUS_COMPLETED) {
+      if (delivery.status !== DELIVERY_STATUS_PENDING) {
         throw new BadRequestException('Delivery already received');
       }
 
@@ -321,17 +381,28 @@ export class DeliveriesService {
         );
       }
 
-      for (const alloc of dto.allocations) {
-        const [tank] = await tx
-          .select({
-            id: tanks.id,
-            branchId: tanks.branchId,
-            productId: tanks.productId,
-            capacity: tanks.capacity,
-            currentLevel: tanks.currentLevel,
-          })
-          .from(tanks)
-          .where(and(eq(tanks.id, alloc.tankId), isNull(tanks.deletedAt)));
+      const tankIds = allocations.map((allocation) => allocation.tankId);
+      const tankRows = tankIds.length
+        ? (
+            await tx.execute<LockedTankRow>(sql`
+              SELECT
+                id,
+                branch_id AS "branchId",
+                product_id AS "productId",
+                capacity,
+                current_level AS "currentLevel"
+              FROM tanks
+              WHERE id = ANY(${tankIds}::uuid[])
+                AND deleted_at IS NULL
+              ORDER BY id
+              FOR UPDATE
+            `)
+          ).rows
+        : [];
+      const tankById = new Map(tankRows.map((tank) => [tank.id, tank]));
+
+      for (const alloc of allocations) {
+        const tank = tankById.get(alloc.tankId);
         if (!tank) throw new NotFoundException(`Tank ${alloc.tankId} not found`);
         if (tank.branchId !== delivery.branchId) {
           throw new BadRequestException(`Tank ${alloc.tankId} does not belong to delivery branch`);
@@ -371,7 +442,7 @@ export class DeliveriesService {
 
       if (!grn) throw new InternalServerErrorException('Failed to insert GRN');
 
-      for (const alloc of dto.allocations) {
+      for (const alloc of allocations) {
         await tx.insert(grnAllocations).values({
           grnId: grn.id,
           tankId: alloc.tankId,
@@ -379,43 +450,35 @@ export class DeliveriesService {
         });
       }
 
-      for (const alloc of dto.allocations) {
-        const [tank] = await tx
-          .select({
-            id: tanks.id,
-            branchId: tanks.branchId,
-            productId: tanks.productId,
-            currentLevel: tanks.currentLevel,
-          })
-          .from(tanks)
-          .where(eq(tanks.id, alloc.tankId));
-        if (tank) {
-          const newLevel = Number(tank.currentLevel || 0) + alloc.quantity;
-          await tx
-            .update(tanks)
-            .set({
-              currentLevel: String(newLevel.toFixed(3)),
-              updatedAt: receivedAt,
-              updatedBy: ctx.userId,
-            })
-            .where(eq(tanks.id, alloc.tankId));
-          await tx.insert(stockLedger).values({
-            companyId: delivery.companyId,
-            branchId: tank.branchId,
-            tankId: alloc.tankId,
-            productId: tank.productId,
-            movementType: 'grn',
-            referenceType: 'grn',
-            referenceId: grn.id,
-            quantity: String(alloc.quantity.toFixed(3)),
-            movementDate: receivedAt,
-            createdBy: ctx.userId,
+      for (const alloc of allocations) {
+        const tank = tankById.get(alloc.tankId);
+        if (!tank) continue;
+
+        const qtyString = alloc.quantity.toFixed(3);
+        await tx
+          .update(tanks)
+          .set({
+            currentLevel: sql`(${tanks.currentLevel} + ${qtyString}::numeric)`,
+            updatedAt: receivedAt,
             updatedBy: ctx.userId,
-          });
-        }
+          })
+          .where(eq(tanks.id, alloc.tankId));
+        await tx.insert(stockLedger).values({
+          companyId: delivery.companyId,
+          branchId: tank.branchId,
+          tankId: alloc.tankId,
+          productId: tank.productId,
+          movementType: 'grn',
+          referenceType: 'grn',
+          referenceId: grn.id,
+          quantity: qtyString,
+          movementDate: receivedAt,
+          createdBy: ctx.userId,
+          updatedBy: ctx.userId,
+        });
       }
 
-      await tx
+      const [updatedDelivery] = await tx
         .update(deliveries)
         .set({
           receivedQty: String(receivedQty.toFixed(3)),
@@ -425,7 +488,17 @@ export class DeliveriesService {
           updatedAt: receivedAt,
           updatedBy: ctx.userId,
         })
-        .where(eq(deliveries.id, deliveryId));
+        .where(
+          and(
+            eq(deliveries.id, deliveryId),
+            eq(deliveries.status, DELIVERY_STATUS_PENDING),
+            isNull(deliveries.deletedAt),
+          ),
+        )
+        .returning({ id: deliveries.id });
+      if (!updatedDelivery) {
+        throw new InternalServerErrorException('Failed to mark delivery as received');
+      }
 
       await this.audit.log(
         {
@@ -457,43 +530,86 @@ export class DeliveriesService {
   }
 
   async deleteDelivery(id: string, ctx: AuditContext): Promise<{ success: boolean }> {
-    const [delivery] = await this.db
-      .select()
-      .from(deliveries)
-      .where(and(eq(deliveries.id, id), isNull(deliveries.deletedAt)));
-    if (!delivery) throw new NotFoundException('Delivery not found');
-    if (delivery.status === 'voided' || delivery.status === 'deleted')
-      throw new BadRequestException('Delivery already voided');
-
     const now = new Date();
 
     await this.db.transaction(async (tx) => {
+      const [delivery] = (
+        await tx.execute<LockedDeliveryRow>(sql`
+          SELECT
+            id,
+            company_id AS "companyId",
+            branch_id AS "branchId",
+            delivery_note AS "deliveryNote",
+            supplier_id AS "supplierId",
+            vehicle_no AS "vehicleNo",
+            driver_name AS "driverName",
+            product_id AS "productId",
+            ordered_qty AS "orderedQty",
+            expected_date AS "expectedDate",
+            received_qty AS "receivedQty",
+            density,
+            temperature,
+            status,
+            created_at AS "createdAt"
+          FROM deliveries
+          WHERE id = ${id}
+            AND deleted_at IS NULL
+          FOR UPDATE
+        `)
+      ).rows;
+      if (!delivery) throw new NotFoundException('Delivery not found');
+      if (delivery.status === 'voided' || delivery.status === 'deleted') {
+        throw new BadRequestException('Delivery already voided');
+      }
+
       if (delivery.status === DELIVERY_STATUS_COMPLETED) {
         // Reverse GRN and stock ledger
-        const [grn] = await tx.select().from(grns).where(eq(grns.deliveryId, id));
+        const [grn] = (
+          await tx.execute<typeof grns.$inferSelect>(sql`
+            SELECT *
+            FROM grns
+            WHERE delivery_id = ${id}
+            FOR UPDATE
+          `)
+        ).rows;
         if (grn) {
           const allocs = await tx
-            .select()
+            .select({
+              tankId: grnAllocations.tankId,
+              quantity: sql<string>`COALESCE(SUM(${grnAllocations.quantity}), 0)::text`,
+            })
             .from(grnAllocations)
-            .where(eq(grnAllocations.grnId, grn.id));
+            .where(eq(grnAllocations.grnId, grn.id))
+            .groupBy(grnAllocations.tankId);
+
+          const tankIds = allocs.map((alloc) => alloc.tankId);
+          const tankRows = tankIds.length
+            ? (
+                await tx.execute<LockedTankRow>(sql`
+                  SELECT
+                    id,
+                    branch_id AS "branchId",
+                    product_id AS "productId",
+                    capacity,
+                    current_level AS "currentLevel"
+                  FROM tanks
+                  WHERE id = ANY(${tankIds}::uuid[])
+                  ORDER BY id
+                  FOR UPDATE
+                `)
+              ).rows
+            : [];
+          const tankById = new Map(tankRows.map((tank) => [tank.id, tank]));
 
           for (const alloc of allocs) {
-            const [tank] = await tx
-              .select({
-                id: tanks.id,
-                branchId: tanks.branchId,
-                productId: tanks.productId,
-                currentLevel: tanks.currentLevel,
-              })
-              .from(tanks)
-              .where(eq(tanks.id, alloc.tankId));
+            const tank = tankById.get(alloc.tankId);
             if (tank) {
               const qty = Number(alloc.quantity);
-              const newLevel = Number(tank.currentLevel || 0) - qty;
+              const qtyString = qty.toFixed(3);
               await tx
                 .update(tanks)
                 .set({
-                  currentLevel: String(newLevel.toFixed(3)),
+                  currentLevel: sql`(${tanks.currentLevel} - ${qtyString}::numeric)`,
                   updatedAt: now,
                   updatedBy: ctx.userId,
                 })
@@ -507,7 +623,7 @@ export class DeliveriesService {
                 movementType: 'grn_void',
                 referenceType: 'grn_void',
                 referenceId: grn.id,
-                quantity: `-${qty.toFixed(3)}`,
+                quantity: `-${qtyString}`,
                 movementDate: now,
                 createdBy: ctx.userId,
                 updatedBy: ctx.userId,

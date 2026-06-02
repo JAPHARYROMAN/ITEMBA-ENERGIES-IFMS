@@ -61,11 +61,19 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
+    exposedHeaders: ['x-request-id'],
   });
 
   app.setGlobalPrefix('api', {
-    exclude: ['health/live', 'health/ready', 'docs', 'docs-json', 'public/report/verify', 'public/report/verify/receipt'],
+    exclude: [
+      'health/live',
+      'health/ready',
+      'docs',
+      'docs-json',
+      'public/report/verify',
+      'public/report/verify/receipt',
+    ],
   });
 
   app.useGlobalPipes(
@@ -97,8 +105,17 @@ async function bootstrap() {
   }
 
   const shouldEnableSwagger = process.env.NODE_ENV !== 'production' || enableSwagger;
+  if (
+    process.env.NODE_ENV === 'production' &&
+    enableSwagger &&
+    (!swaggerUser?.trim() || !swaggerPass?.trim())
+  ) {
+    throw new Error(
+      'SWAGGER_BASIC_USER and SWAGGER_BASIC_PASS are required when ENABLE_SWAGGER=true in production',
+    );
+  }
   if (shouldEnableSwagger) {
-    if (process.env.NODE_ENV === 'production' && swaggerUser && swaggerPass) {
+    if (process.env.NODE_ENV === 'production') {
       app.use(['/docs', '/docs-json'], (req: Request, res: Response, next: NextFunction) => {
         const auth = req.headers.authorization;
         if (!auth?.startsWith('Basic ')) {
@@ -106,7 +123,10 @@ async function bootstrap() {
           return res.status(401).send('Authentication required');
         }
         const encoded = auth.slice('Basic '.length);
-        const [user, pass] = Buffer.from(encoded, 'base64').toString('utf8').split(':');
+        const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+        const separatorIndex = decoded.indexOf(':');
+        const user = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : '';
+        const pass = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : '';
         if (user !== swaggerUser || pass !== swaggerPass) {
           res.setHeader('WWW-Authenticate', 'Basic realm="IFMS Swagger"');
           return res.status(401).send('Invalid credentials');

@@ -23,6 +23,9 @@ apps/api/.env.*
 # Build artifacts
 apps/api/build_errors.txt
 
+# Runtime storage
+apps/api/storage/
+
 # AI assistant config
 .claude/
 

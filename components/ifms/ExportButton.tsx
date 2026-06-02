@@ -1,7 +1,7 @@
 import React from 'react';
 import { FileDown, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { apiExports, type ExportRecord, type ExportType } from '../../lib/api/exports';
-import { useAppStore } from '../../store';
+import { hasPermission, useAppStore, useAuthStore } from '../../store';
 import { EXPORT_POLL_INTERVAL_MS, EXPORT_INITIAL_DELAY_MS } from '../../lib/constants';
 import { useTranslation } from 'react-i18next';
 
@@ -30,9 +30,11 @@ export const ExportButton: React.FC<ExportButtonProps> = ({
 }) => {
   const { t } = useTranslation();
   const { addToast } = useAppStore();
+  const { user } = useAuthStore();
   const [open, setOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const pollTimer = React.useRef<number | null>(null);
+  const canExport = hasPermission(user, 'reports:read');
 
   const stopPolling = React.useCallback(() => {
     if (pollTimer.current) {
@@ -108,6 +110,8 @@ export const ExportButton: React.FC<ExportButtonProps> = ({
       });
     }
   };
+
+  if (!canExport) return null;
 
   return (
     <div className="relative">

@@ -26,7 +26,8 @@ export const PasswordField: React.FC<PasswordFieldProps> = ({
   describedBy,
   autoComplete,
 }) => {
-  const inputId = id ?? useId();
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
   const [visible, setVisible] = useState(false);
   const errorId = `${inputId}-error`;
   const helperId = describedBy;

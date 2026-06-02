@@ -28,11 +28,11 @@ export function StationToStationTransferForm({ onSuccess, onCancel }: { onSucces
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transfers'] });
-      addToast({ type: 'success', message: 'Station-to-station transfer completed' });
+      addToast('Station-to-station transfer completed', 'success');
       onSuccess();
     },
     onError: (err: any) => {
-      addToast({ type: 'error', message: err?.message ?? 'Transfer failed' });
+      addToast(err?.message ?? 'Transfer failed', 'error');
     },
   });
 

@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, desc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -26,12 +25,13 @@ import {
   users,
   variances,
 } from '../../database/schema';
-import type { ReportsQueryDto } from './dto/reports-query.dto';
+import type { ReportsQueryDto, ScopedReportsQuery } from './dto/reports-query.dto';
 import { AuditService } from '../audit/audit.service';
 import type { ReportActionDto } from './dto/report-action.dto';
 import { ReportsMvService } from './reports-mv.service';
 import { LruTtlCache } from './lru-cache';
 import { OpsMetricsService } from '../../common/ops/ops-metrics.service';
+import { hasTenantScope, mergeTenantScope } from '../../common/helpers/scope.helper';
 
 type Schema = typeof schema;
 
@@ -40,6 +40,8 @@ export interface ReportScopeContext {
   permissions: string[];
   companyId?: string;
   branchId?: string;
+  companyIds?: string[];
+  branchIds?: string[];
 }
 
 export interface ReportPerfContext {
@@ -99,59 +101,59 @@ export class ReportsService {
   }
 
   async getOverview(filters: ReportsQueryDto, ctx?: ReportPerfContext) {
-    return this.runReport('overview', filters, ctx, async (timed, recordSource) => {
-      const kpis = await timed('overview.kpis', () => this.getOverviewKpis(filters));
+    return this.runReport('overview', filters, ctx, async (scopedFilters, timed, recordSource) => {
+      const kpis = await timed('overview.kpis', () => this.getOverviewKpis(scopedFilters));
       recordSource('overview.kpis', 'raw');
 
       let salesTrend: { date: string; amount: number }[];
       const salesTrendFromViews = await timed('overview.salesTrend.views', () =>
-        this.reportsMv.getSalesTrendFromViews(filters),
+        this.reportsMv.getSalesTrendFromViews(scopedFilters),
       );
       if (salesTrendFromViews != null) {
         salesTrend = salesTrendFromViews;
         recordSource('overview.salesTrend', 'views');
       } else {
-        salesTrend = await timed('overview.salesTrend', () => this.getSalesTrend(filters));
+        salesTrend = await timed('overview.salesTrend', () => this.getSalesTrend(scopedFilters));
         recordSource('overview.salesTrend', 'raw');
       }
 
       let paymentMix: { name: string; value: number }[];
       const paymentMixFromViews = await timed('overview.paymentMix.views', () =>
-        this.reportsMv.getPaymentMixFromViews(filters),
+        this.reportsMv.getPaymentMixFromViews(scopedFilters),
       );
       if (paymentMixFromViews != null) {
         paymentMix = paymentMixFromViews;
         recordSource('overview.paymentMix', 'views');
       } else {
-        paymentMix = await timed('overview.paymentMix', () => this.getPaymentMix(filters));
+        paymentMix = await timed('overview.paymentMix', () => this.getPaymentMix(scopedFilters));
         recordSource('overview.paymentMix', 'raw');
       }
 
       const varianceByStation = await timed('overview.varianceByStation', () =>
-        this.getVarianceByStation(filters),
+        this.getVarianceByStation(scopedFilters),
       );
       recordSource('overview.varianceByStation', 'raw');
-      const topDebtors = await timed('overview.topDebtors', () => this.getTopDebtors(filters));
+      const topDebtors = await timed('overview.topDebtors', () => this.getTopDebtors(scopedFilters));
       recordSource('overview.topDebtors', 'raw');
       return { kpis, salesTrend, paymentMix, varianceByStation, topDebtors };
     });
   }
 
   async getDailyOperations(filters: ReportsQueryDto, ctx?: ReportPerfContext) {
-    return this.runReport('daily-operations', filters, ctx, async (timed, recordSource) => {
-      const shiftsData = await timed('dailyOperations.shifts', () => this.getShiftPerformance(filters));
+    return this.runReport('daily-operations', filters, ctx, async (scopedFilters, timed, recordSource) => {
+      const shiftsData = await timed('dailyOperations.shifts', () => this.getShiftPerformance(scopedFilters));
       recordSource('dailyOperations.shifts', 'raw');
-      const pumpsData = await timed('dailyOperations.pumps', () => this.getPumpPerformance(filters));
+      const pumpsData = await timed('dailyOperations.pumps', () => this.getPumpPerformance(scopedFilters));
       recordSource('dailyOperations.pumps', 'raw');
       let paymentMix: { name: string; value: number }[];
       const paymentMixFromViews = await timed('dailyOperations.paymentMix.views', () =>
-        this.reportsMv.getPaymentMixFromViews(filters),
+        this.reportsMv.getPaymentMixFromViews(scopedFilters),
       );
       if (paymentMixFromViews != null) {
         paymentMix = paymentMixFromViews;
         recordSource('dailyOperations.paymentMix', 'views');
       } else {
-        paymentMix = await timed('dailyOperations.paymentMix', () => this.getPaymentMix(filters));
+        paymentMix = await timed('dailyOperations.paymentMix', () => this.getPaymentMix(scopedFilters));
         recordSource('dailyOperations.paymentMix', 'raw');
       }
       const avgVariance =
@@ -179,14 +181,14 @@ export class ReportsService {
   }
 
   async getStockLoss(filters: ReportsQueryDto, ctx?: ReportPerfContext) {
-    return this.runReport('stock-loss', filters, ctx, async (timed, recordSource) => {
+    return this.runReport('stock-loss', filters, ctx, async (scopedFilters, timed, recordSource) => {
       recordSource('stockLoss.tankLosses', 'raw');
       recordSource('stockLoss.shrinkageTrend', 'raw');
       recordSource('stockLoss.deliveryReconciliation', 'raw');
-      const losses = await timed('stockLoss.tankLosses', () => this.getTankLossRows(filters));
-      const trend = await timed('stockLoss.shrinkageTrend', () => this.getShrinkageTrend(filters));
+      const losses = await timed('stockLoss.tankLosses', () => this.getTankLossRows(scopedFilters));
+      const trend = await timed('stockLoss.shrinkageTrend', () => this.getShrinkageTrend(scopedFilters));
       const deliveryRecon = await timed('stockLoss.deliveryReconciliation', () =>
-        this.getDeliveryReconciliation(filters),
+        this.getDeliveryReconciliation(scopedFilters),
       );
       const totalVariance = losses.reduce((acc, l) => acc + l.variance, 0);
       return {
@@ -205,17 +207,17 @@ export class ReportsService {
   }
 
   async getProfitability(filters: ReportsQueryDto, ctx?: ReportPerfContext) {
-    return this.runReport('profitability', filters, ctx, async (timed, recordSource) => {
+    return this.runReport('profitability', filters, ctx, async (scopedFilters, timed, recordSource) => {
       recordSource('profitability.metrics', 'raw');
       recordSource('profitability.marginByProduct', 'raw');
       recordSource('profitability.stationContribution', 'raw');
       recordSource('profitability.priceImpact', 'raw');
-      const metrics = await timed('profitability.metrics', () => this.getProfitabilityMetrics(filters));
+      const metrics = await timed('profitability.metrics', () => this.getProfitabilityMetrics(scopedFilters));
       const marginByProduct = await timed('profitability.marginByProduct', () =>
-        this.getMarginByProduct(filters),
+        this.getMarginByProduct(scopedFilters),
       );
       const stationContribution = await timed('profitability.stationContribution', () =>
-        this.getStationContribution(filters),
+        this.getStationContribution(scopedFilters),
       );
       const priceImpact = await timed('profitability.priceImpact', async () =>
         this.getPriceImpactSimulation(),
@@ -225,13 +227,13 @@ export class ReportsService {
   }
 
   async getCreditCashflow(filters: ReportsQueryDto, ctx?: ReportPerfContext) {
-    return this.runReport('credit-cashflow', filters, ctx, async (timed, recordSource) => {
+    return this.runReport('credit-cashflow', filters, ctx, async (scopedFilters, timed, recordSource) => {
       recordSource('creditCashflow.arAging', 'raw');
       recordSource('creditCashflow.apAging', 'raw');
       recordSource('creditCashflow.topDebtors', 'raw');
-      const arAging = await timed('creditCashflow.arAging', () => this.getCreditAging(filters));
-      const apAging = await timed('creditCashflow.apAging', () => this.getPayablesAging(filters));
-      const topDebtors = await timed('creditCashflow.topDebtors', () => this.getTopDebtors(filters, 20));
+      const arAging = await timed('creditCashflow.arAging', () => this.getCreditAging(scopedFilters));
+      const apAging = await timed('creditCashflow.apAging', () => this.getPayablesAging(scopedFilters));
+      const topDebtors = await timed('creditCashflow.topDebtors', () => this.getTopDebtors(scopedFilters, 20));
       const sim = {
         opening: 0,
         collections: Number(
@@ -261,10 +263,10 @@ export class ReportsService {
   }
 
   async getStationComparison(filters: ReportsQueryDto, ctx?: ReportPerfContext) {
-    return this.runReport('station-comparison', filters, ctx, async (timed, recordSource) => {
+    return this.runReport('station-comparison', filters, ctx, async (scopedFilters, timed, recordSource) => {
       recordSource('stationComparison.stationContribution', 'raw');
       const rows = await timed('stationComparison.stationContribution', () =>
-        this.getStationContribution(filters),
+        this.getStationContribution(scopedFilters),
       );
       const ranked = [...rows]
         .sort((a, b) => b.contribution - a.contribution)
@@ -285,7 +287,7 @@ export class ReportsService {
             .from(salesTransactions)
             .innerJoin(branches, eq(salesTransactions.branchId, branches.id))
             .innerJoin(stations, eq(branches.stationId, stations.id))
-            .where(this.salesWhere(filters))
+            .where(this.salesWhere(scopedFilters))
             .groupBy(stations.id)
             .orderBy(stations.id),
         ),
@@ -303,7 +305,7 @@ export class ReportsService {
     });
   }
 
-  private async getOverviewKpis(filters: ReportsQueryDto) {
+  private async getOverviewKpis(filters: ScopedReportsQuery) {
     const [salesRow] = await this.execQuery(
       'overview.kpis.sales',
       this.db
@@ -376,7 +378,7 @@ export class ReportsService {
     };
   }
 
-  private async getSalesTrend(filters: ReportsQueryDto) {
+  private async getSalesTrend(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'overview.salesTrend.rows',
       this.db
@@ -393,7 +395,7 @@ export class ReportsService {
     return rows.map((r) => ({ date: r.date, amount: Number(r.amount) }));
   }
 
-  private async getPaymentMix(filters: ReportsQueryDto) {
+  private async getPaymentMix(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'overview.paymentMix.rows',
       this.db
@@ -411,7 +413,7 @@ export class ReportsService {
     return rows.map((r) => ({ name: r.name, value: Number(r.value) }));
   }
 
-  private async getVarianceByStation(filters: ReportsQueryDto) {
+  private async getVarianceByStation(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'overview.varianceByStation.rows',
       this.db
@@ -434,7 +436,7 @@ export class ReportsService {
     }));
   }
 
-  private async getTopDebtors(filters: ReportsQueryDto, limit = 10) {
+  private async getTopDebtors(filters: ScopedReportsQuery, limit = 10) {
     const rows = await this.execQuery(
       'topDebtors.baseRows',
       this.db
@@ -528,7 +530,7 @@ export class ReportsService {
     });
   }
 
-  private async getShiftPerformance(filters: ReportsQueryDto) {
+  private async getShiftPerformance(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'dailyOperations.shiftPerformance.rows',
       this.db
@@ -566,7 +568,7 @@ export class ReportsService {
     });
   }
 
-  private async getPumpPerformance(filters: ReportsQueryDto) {
+  private async getPumpPerformance(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'dailyOperations.pumpPerformance.rows',
       this.db
@@ -602,7 +604,7 @@ export class ReportsService {
     });
   }
 
-  private async getTankLossRows(filters: ReportsQueryDto) {
+  private async getTankLossRows(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'stockLoss.tankLossRows.rows',
       this.db
@@ -642,7 +644,7 @@ export class ReportsService {
       };
     });
   }
-  private async getShrinkageTrend(filters: ReportsQueryDto) {
+  private async getShrinkageTrend(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'stockLoss.shrinkageTrend.rows',
       this.db
@@ -660,7 +662,7 @@ export class ReportsService {
     return rows.map((r) => ({ date: r.date, rate: Number(r.rate) }));
   }
 
-  private async getDeliveryReconciliation(filters: ReportsQueryDto) {
+  private async getDeliveryReconciliation(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'stockLoss.deliveryReconciliation.rows',
       this.db
@@ -691,7 +693,7 @@ export class ReportsService {
     });
   }
 
-  private async getProfitabilityMetrics(filters: ReportsQueryDto) {
+  private async getProfitabilityMetrics(filters: ScopedReportsQuery) {
     const [row] = await this.execQuery(
       'profitability.metrics.rows',
       this.db
@@ -718,7 +720,7 @@ export class ReportsService {
     };
   }
 
-  private async getMarginByProduct(filters: ReportsQueryDto) {
+  private async getMarginByProduct(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'profitability.marginByProduct.rows',
       this.db
@@ -750,7 +752,7 @@ export class ReportsService {
     });
   }
 
-  private async getStationContribution(filters: ReportsQueryDto) {
+  private async getStationContribution(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'stationContribution.rows',
       this.db
@@ -819,7 +821,7 @@ export class ReportsService {
     };
   }
 
-  private async getCreditAging(filters: ReportsQueryDto) {
+  private async getCreditAging(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'creditCashflow.creditAging.rows',
       this.db
@@ -853,7 +855,7 @@ export class ReportsService {
     }));
   }
 
-  private async getPayablesAging(filters: ReportsQueryDto) {
+  private async getPayablesAging(filters: ScopedReportsQuery) {
     const rows = await this.execQuery(
       'creditCashflow.payablesAging.rows',
       this.db
@@ -883,20 +885,24 @@ export class ReportsService {
     ];
   }
 
-  private salesWhere(filters: ReportsQueryDto) {
+  private salesWhere(filters: ScopedReportsQuery) {
     const c = [isNull(salesTransactions.deletedAt)];
     if (filters.companyId) c.push(eq(salesTransactions.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(salesTransactions.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(salesTransactions.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(salesTransactions.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.dateFrom) c.push(gte(salesTransactions.transactionDate, new Date(filters.dateFrom)));
     if (filters.dateTo) c.push(lte(salesTransactions.transactionDate, new Date(filters.dateTo)));
     return and(...c);
   }
 
-  private salesItemsWhere(filters: ReportsQueryDto) {
+  private salesItemsWhere(filters: ScopedReportsQuery) {
     const c = [isNull(salesTransactions.deletedAt), isNull(saleItems.deletedAt)];
     if (filters.companyId) c.push(eq(salesTransactions.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(salesTransactions.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(salesTransactions.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(salesTransactions.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.productId) c.push(eq(saleItems.productId, filters.productId));
     if (filters.dateFrom) c.push(gte(salesTransactions.transactionDate, new Date(filters.dateFrom)));
@@ -904,10 +910,12 @@ export class ReportsService {
     return and(...c);
   }
 
-  private varianceWhere(filters: ReportsQueryDto) {
+  private varianceWhere(filters: ScopedReportsQuery) {
     const c = [isNull(variances.deletedAt)];
     if (filters.companyId) c.push(eq(variances.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(variances.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(variances.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(variances.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.productId) c.push(eq(tanks.productId, filters.productId));
     if (filters.dateFrom) c.push(gte(variances.varianceDate, new Date(filters.dateFrom)));
@@ -915,30 +923,36 @@ export class ReportsService {
     return and(...c);
   }
 
-  private reconciliationWhere(filters: ReportsQueryDto) {
+  private reconciliationWhere(filters: ScopedReportsQuery) {
     const c = [isNull(reconciliations.deletedAt)];
     if (filters.companyId) c.push(eq(reconciliations.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(reconciliations.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(reconciliations.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(reconciliations.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.dateFrom) c.push(gte(reconciliations.reconciliationDate, new Date(filters.dateFrom)));
     if (filters.dateTo) c.push(lte(reconciliations.reconciliationDate, new Date(filters.dateTo)));
     return and(...c);
   }
 
-  private shiftWhere(filters: ReportsQueryDto) {
+  private shiftWhere(filters: ScopedReportsQuery) {
     const c = [isNull(shifts.deletedAt)];
     if (filters.companyId) c.push(eq(shifts.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(shifts.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(shifts.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(shifts.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(shifts.stationId, filters.stationId));
     if (filters.dateFrom) c.push(gte(shifts.startTime, new Date(filters.dateFrom)));
     if (filters.dateTo) c.push(lte(shifts.startTime, new Date(filters.dateTo)));
     return and(...c);
   }
 
-  private meterWhere(filters: ReportsQueryDto) {
+  private meterWhere(filters: ScopedReportsQuery) {
     const c = [isNull(meterReadings.deletedAt), isNull(shifts.deletedAt)];
     if (filters.companyId) c.push(eq(shifts.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(shifts.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(shifts.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(shifts.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(shifts.stationId, filters.stationId));
     if (filters.productId) c.push(eq(nozzles.productId, filters.productId));
     if (filters.dateFrom) c.push(gte(shifts.startTime, new Date(filters.dateFrom)));
@@ -946,10 +960,12 @@ export class ReportsService {
     return and(...c);
   }
 
-  private deliveryWhere(filters: ReportsQueryDto) {
+  private deliveryWhere(filters: ScopedReportsQuery) {
     const c = [isNull(deliveries.deletedAt)];
     if (filters.companyId) c.push(eq(deliveries.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(deliveries.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(deliveries.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(deliveries.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.productId) c.push(eq(deliveries.productId, filters.productId));
     if (filters.dateFrom) c.push(gte(deliveries.expectedDate, new Date(filters.dateFrom)));
@@ -957,48 +973,58 @@ export class ReportsService {
     return and(...c);
   }
 
-  private tankWhere(filters: ReportsQueryDto) {
+  private tankWhere(filters: ScopedReportsQuery) {
     const c = [isNull(tanks.deletedAt)];
     if (filters.companyId) c.push(eq(tanks.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(tanks.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(tanks.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(tanks.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.productId) c.push(eq(tanks.productId, filters.productId));
     return and(...c);
   }
 
-  private creditWhere(filters: ReportsQueryDto) {
+  private creditWhere(filters: ScopedReportsQuery) {
     const c = [isNull(creditInvoices.deletedAt)];
     if (filters.companyId) c.push(eq(creditInvoices.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(creditInvoices.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(creditInvoices.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(creditInvoices.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.dateFrom) c.push(gte(creditInvoices.invoiceDate, new Date(filters.dateFrom)));
     if (filters.dateTo) c.push(lte(creditInvoices.invoiceDate, new Date(filters.dateTo)));
     return and(...c);
   }
 
-  private payablesWhere(filters: ReportsQueryDto) {
+  private payablesWhere(filters: ScopedReportsQuery) {
     const c = [isNull(supplierInvoices.deletedAt)];
     if (filters.companyId) c.push(eq(supplierInvoices.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(supplierInvoices.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(supplierInvoices.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(supplierInvoices.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     if (filters.dateFrom) c.push(gte(supplierInvoices.invoiceDate, new Date(filters.dateFrom)));
     if (filters.dateTo) c.push(lte(supplierInvoices.invoiceDate, new Date(filters.dateTo)));
     return and(...c);
   }
 
-  private customerWhere(filters: ReportsQueryDto) {
+  private customerWhere(filters: ScopedReportsQuery) {
     const c = [isNull(customers.deletedAt)];
     if (filters.companyId) c.push(eq(customers.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(customers.companyId, filters.companyIds));
     if (filters.branchId) c.push(eq(customers.branchId, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(customers.branchId, filters.branchIds));
     if (filters.stationId) c.push(eq(branches.stationId, filters.stationId));
     return and(...c);
   }
 
-  private stationAggregateWhere(filters: ReportsQueryDto) {
+  private stationAggregateWhere(filters: ScopedReportsQuery) {
     const c = [isNull(stations.deletedAt)];
     if (filters.companyId) c.push(eq(stations.companyId, filters.companyId));
+    else if (filters.companyIds?.length) c.push(inArray(stations.companyId, filters.companyIds));
     if (filters.stationId) c.push(eq(stations.id, filters.stationId));
     if (filters.branchId) c.push(eq(branches.id, filters.branchId));
+    else if (filters.branchIds?.length) c.push(inArray(branches.id, filters.branchIds));
     if (filters.dateFrom) c.push(gte(salesTransactions.transactionDate, new Date(filters.dateFrom)));
     if (filters.dateTo) c.push(lte(salesTransactions.transactionDate, new Date(filters.dateTo)));
     return and(...c);
@@ -1009,6 +1035,7 @@ export class ReportsService {
     filters: ReportsQueryDto,
     ctx: ReportPerfContext | undefined,
     compute: (
+      scopedFilters: ScopedReportsQuery,
       timed: <R>(name: string, fn: () => Promise<R>) => Promise<R>,
       recordSource: (section: string, source: 'views' | 'raw') => void,
     ) => Promise<T>,
@@ -1016,18 +1043,19 @@ export class ReportsService {
     const started = performance.now();
     const timings: Record<string, number> = {};
     const dataSource: Record<string, 'views' | 'raw'> = {};
-    const key = this.buildCacheKey(scope, filters, ctx?.scope);
+    const scopedFilters = this.resolveScopedFilters(filters, ctx?.scope);
+    const key = this.buildCacheKey(scope, scopedFilters, ctx?.scope);
     const now = Date.now();
     const shouldCache = this.cacheEnabled;
 
     if (shouldCache) {
       const hit = this.cache.get(key, now);
       if (hit !== null) {
-        this.logCacheMetric(scope, 'cache_hit', ctx, filters);
-        this.logPerf(scope, ctx, filters, performance.now() - started, {}, true, {});
+        this.logCacheMetric(scope, 'cache_hit', ctx, scopedFilters);
+        this.logPerf(scope, ctx, scopedFilters, performance.now() - started, {}, true, {});
         return hit as T;
       }
-      this.logCacheMetric(scope, 'cache_miss', ctx, filters);
+      this.logCacheMetric(scope, 'cache_miss', ctx, scopedFilters);
     }
 
     const timed = async <R>(name: string, fn: () => Promise<R>): Promise<R> => {
@@ -1040,20 +1068,54 @@ export class ReportsService {
       dataSource[section] = source;
     };
 
-    const value = await compute(timed, recordSource);
+    const value = await compute(scopedFilters, timed, recordSource);
     if (shouldCache) {
       const ttlMs = this.getCacheTtlMs(scope);
       this.cache.set(key, value, ttlMs, Date.now());
     }
-    this.logPerf(scope, ctx, filters, performance.now() - started, timings, false, dataSource);
+    this.logPerf(scope, ctx, scopedFilters, performance.now() - started, timings, false, dataSource);
     return value;
+  }
+
+  private resolveScopedFilters(filters: ReportsQueryDto, scopeContext?: ReportScopeContext): ScopedReportsQuery {
+    const tenantScope = mergeTenantScope(scopeContext);
+    if (!hasTenantScope(tenantScope)) {
+      throw new ForbiddenException('No tenant scopes are assigned to this account');
+    }
+
+    if (filters.companyId && !tenantScope.companyIds.includes(filters.companyId)) {
+      throw new ForbiddenException(`Access to company ${filters.companyId} is strictly forbidden`);
+    }
+
+    if (filters.branchId && !tenantScope.branchIds.includes(filters.branchId)) {
+      throw new ForbiddenException('You do not have access to the requested branch');
+    }
+
+    const scoped: ScopedReportsQuery = { ...filters };
+    if (!scoped.companyId) {
+      if (tenantScope.companyIds.length === 1) {
+        scoped.companyId = tenantScope.companyIds[0];
+      } else if (tenantScope.companyIds.length > 1) {
+        scoped.companyIds = tenantScope.companyIds;
+      }
+    }
+
+    if (!scoped.branchId) {
+      if (tenantScope.branchIds.length === 1) {
+        scoped.branchId = tenantScope.branchIds[0];
+      } else if (tenantScope.branchIds.length > 1) {
+        scoped.branchIds = tenantScope.branchIds;
+      }
+    }
+
+    return scoped;
   }
 
   private getCacheTtlMs(scope: string): number {
     return this.cacheTtlByReportMs[scope] ?? this.cacheDefaultTtlMs;
   }
 
-  private buildCacheKey(scope: string, filters: ReportsQueryDto, scopeContext?: ReportScopeContext): string {
+  private buildCacheKey(scope: string, filters: ScopedReportsQuery, scopeContext?: ReportScopeContext): string {
     return this.stableStringify({
       endpoint: scope,
       filters: this.normalizeFilters(filters),
@@ -1061,10 +1123,12 @@ export class ReportsService {
     });
   }
 
-  private normalizeFilters(filters: ReportsQueryDto): Record<string, string> {
+  private normalizeFilters(filters: ScopedReportsQuery): Record<string, string> {
     return {
       branchId: filters.branchId ?? '',
+      branchIds: (filters.branchIds ?? []).slice().sort().join(','),
       companyId: filters.companyId ?? '',
+      companyIds: (filters.companyIds ?? []).slice().sort().join(','),
       dateFrom: filters.dateFrom ?? '',
       dateTo: filters.dateTo ?? '',
       productId: filters.productId ?? '',
@@ -1080,7 +1144,9 @@ export class ReportsService {
       userId: scopeContext.userId,
       permissions: [...scopeContext.permissions].sort(),
       companyId: scopeContext.companyId ?? '',
+      companyIds: (scopeContext.companyIds ?? []).slice().sort(),
       branchId: scopeContext.branchId ?? '',
+      branchIds: (scopeContext.branchIds ?? []).slice().sort(),
     };
   }
 

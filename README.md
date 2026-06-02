@@ -114,14 +114,17 @@ IFMS includes a configurable governance workflow system that supports:
 
 ### Frontend
 
-* Next.js (App Router)
+* Vite 6
+* React 19
+* React Router 7 (HashRouter)
 * TypeScript
-* Tailwind CSS
-* shadcn/ui
+* Tailwind CSS (custom component library)
 * TanStack Query
 * Zustand
 * React Hook Form + Zod
 * Recharts
+* i18next (react-i18next)
+* socket.io-client
 
 ### Backend
 
@@ -156,38 +159,80 @@ IFMS includes a configurable governance workflow system that supports:
 
 ---
 
-## Repository Structure (Monorepo Example)
+## Repository Structure
+
+The backend lives in `apps/api`; the frontend is a Vite app at the repository root.
 
 ```
+/                              → Vite + React frontend (root)
+  App.tsx                      → root application component
+  index.tsx / index.html       → frontend entry point
+  store.ts                     → Zustand store
+  types.ts                     → shared frontend types
+  constants.tsx                → app constants
+  vite.config.ts               → Vite config (dev server on port 3005)
+  /components                  → React UI components
+    /ifms                      → IFMS domain components
+    /ui                        → reusable Tailwind UI primitives
+    /forms /pages /pos /reports /expenses
+  /lib                         → frontend utilities
+    /api                       → API client layer
+    /hooks /locales
+  /hooks                       → shared React hooks
+  /shared                      → shared types (frontend/backend)
 /apps
-  /web     → Next.js frontend
-  /api     → NestJS backend
-/docs
-/scripts
-/docker-compose.yml
+  /api                         → NestJS backend (API on port 3001)
+/docs                          → documentation
+/scripts                       → operational scripts
+/docker-compose.yml            → base compose (also .staging / .production)
+/nginx.conf                    → Nginx reverse proxy config
+/Dockerfile                    → frontend image
 ```
 
 ---
 
 ## Running Locally
 
-### 1. Start Database & API
+### 1. Start Postgres
 
 ```bash
-docker-compose up -d
+docker compose up -d postgres
 ```
 
-### 2. Run Frontend
+The local compose database is exposed on `localhost:5433` with user/password/db `ifms`.
+
+### 2. Start the API
 
 ```bash
-cd apps/web
+cd apps/api
+cp .env.example .env
+npm install
+npm run db:migrate
+npm run db:seed
+npm run start:dev
+```
+
+The NestJS API listens on [http://localhost:3001](http://localhost:3001). Health probes are:
+
+* Live: [http://localhost:3001/health/live](http://localhost:3001/health/live)
+* Ready: [http://localhost:3001/health/ready](http://localhost:3001/health/ready) (`503` when the DB is unavailable)
+
+If you need to restore the default local admin after a reset, run `npm run db:reset-admin` from `apps/api`. The local seeded login is `admin@ifms.local` / `1618`.
+
+### 3. Run Frontend
+
+The frontend runs from the repository root via Vite:
+
+```bash
 npm install
 npm run dev
 ```
 
-### 3. Access
+The Vite dev server listens on [http://localhost:3005](http://localhost:3005). Ensure `apps/api/.env` has `FRONTEND_ORIGIN` entries for `http://localhost:3005` and `http://localhost:5173`.
 
-* Web App: [http://localhost:3000](http://localhost:3000)
+### 4. Access
+
+* Web App: [http://localhost:3005](http://localhost:3005)
 * API Docs (Swagger): [http://localhost:3001/docs](http://localhost:3001/docs)
 
 ---

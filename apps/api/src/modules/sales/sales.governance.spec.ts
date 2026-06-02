@@ -15,12 +15,19 @@ describe('SalesService governance integration', () => {
     };
 
     const selectWhere = jest.fn(async () => [existing]);
-    const updateWhere = jest.fn(async () => []);
+    const updateReturning = jest.fn(async () => [
+      { id: 'sale-1', status: SALE_STATUS_PENDING_VOID_APPROVAL, voidReason: 'Fraud suspected' },
+    ]);
+    const updateWhere = jest.fn().mockReturnValue({ returning: updateReturning });
     const set = jest.fn().mockReturnValue({ where: updateWhere });
+    const tx = {
+      execute: jest.fn(async () => ({ rows: [{ status: 'completed' }] })),
+      update: jest.fn().mockReturnValue({ set }),
+    };
 
     const db = {
       select: jest.fn().mockReturnValue({ from: () => ({ where: selectWhere }) }),
-      update: jest.fn().mockReturnValue({ set }),
+      transaction: jest.fn(async (fn: (t: typeof tx) => Promise<void>) => fn(tx)),
     } as any;
 
     const audit = { log: jest.fn() } as any;

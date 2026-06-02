@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import type { JwtPayloadUser } from '../decorators/current-user.decorator';
+import { extractTenantScope } from '../../../common/helpers/scope.helper';
 /**
  * Guard that validates the requesting user has access to the branch
  * specified in the request (body.branchId, query.branchId, or params.branchId).
@@ -29,25 +30,26 @@ export class BranchScopeGuard implements CanActivate {
     const user = request.user as JwtPayloadUser | undefined;
     if (!user) throw new ForbiddenException('Authentication required');
 
-    // Extract branchId from the request (params > body > query)
-    const branchId =
-      request.params?.branchId ??
-      request.body?.branchId ??
-      request.query?.branchId;
+    const requestedBranchIds = [
+      request.params?.branchId,
+      request.body?.branchId,
+      request.query?.branchId,
+    ].filter((branchId): branchId is string => typeof branchId === 'string' && branchId.length > 0);
 
     // If no branchId in the request, allow through (non-branch-scoped endpoint)
-    if (!branchId) return true;
+    if (requestedBranchIds.length === 0) return true;
 
-    const userBranchScopes = user.permissions.filter((p) => p.startsWith('branch:'));
-    if (userBranchScopes.length === 0) {
+    const { branchIds } = extractTenantScope(user.permissions ?? []);
+    if (branchIds.length === 0) {
       throw new ForbiddenException('No branch scopes are assigned to this account');
     }
 
-    const hasBranchScope = user.permissions.includes(`branch:${branchId}`);
-    if (!hasBranchScope) {
-      throw new ForbiddenException(
-        'You do not have access to the requested branch',
-      );
+    for (const branchId of requestedBranchIds) {
+      if (!branchIds.includes(branchId)) {
+        throw new ForbiddenException(
+          'You do not have access to the requested branch',
+        );
+      }
     }
 
     return true;

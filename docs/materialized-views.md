@@ -112,4 +112,4 @@ Refresh order: `mv_daily_sales_summary` → `mv_daily_stock_variance` → `mv_da
 ## Migration
 
 - **File:** `apps/api/drizzle/0005_materialized_views.sql`
-- **Apply:** With the rest of the Drizzle migrations (e.g. `RUN_MIGRATIONS_ON_STARTUP=true` or `npm run db:migrate` from `apps/api`). Ensure migrations have run before relying on report acceleration or the refresh job.
+- **Apply:** With the rest of the Drizzle migrations (e.g. `npm run db:migrate:ci` from `apps/api` or the deployment migration step). Ensure migrations have run before relying on report acceleration or the refresh job.

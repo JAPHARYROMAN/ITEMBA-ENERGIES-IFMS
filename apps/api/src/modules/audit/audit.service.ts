@@ -13,6 +13,7 @@ export interface AuditEntry {
   before?: object | null;
   after?: object | null;
   userId?: string | null;
+  companyId?: string | null;
   ip?: string | null;
   userAgent?: string | null;
 }
@@ -31,6 +32,7 @@ export class AuditService {
       beforeJson: entry.before ?? null,
       afterJson: entry.after ?? null,
       actorUserId: entry.userId ?? null,
+      companyId: entry.companyId ?? null,
       ip: entry.ip ?? null,
       userAgent: entry.userAgent ?? null,
     });

@@ -14,6 +14,7 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: 'jsdom',
       exclude: ['**/node_modules/**', '**/apps/api/**'],
+      maxWorkers: 1,
       setupFiles: ['./lib/test-setup.ts'],
     },
     plugins: [react()],

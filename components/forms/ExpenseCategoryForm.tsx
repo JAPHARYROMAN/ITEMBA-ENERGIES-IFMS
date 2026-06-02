@@ -28,11 +28,11 @@ export function ExpenseCategoryForm({ onSuccess, onCancel }: { onSuccess: () => 
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expense-categories'] });
-      addToast({ type: 'success', message: 'Category created' });
+      addToast('Category created', 'success');
       onSuccess();
     },
     onError: (err: any) => {
-      addToast({ type: 'error', message: err?.message ?? 'Failed to create category' });
+      addToast(err?.message ?? 'Failed to create category', 'error');
     },
   });
 

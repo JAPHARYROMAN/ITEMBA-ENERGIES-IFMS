@@ -39,7 +39,7 @@ const rule = {
   },
 
   create(context) {
-    const filename = context.getFilename();
+    const filename = context.filename ?? context.getFilename?.() ?? '';
 
     // Allow the wrapper implementations themselves
     if (filename.includes('ifms/forms/')) return {};

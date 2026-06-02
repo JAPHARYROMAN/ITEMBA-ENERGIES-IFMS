@@ -130,7 +130,10 @@ describe('DeliveriesService', () => {
       };
       const dto = {
         receivedQty: 100,
-        allocations: [{ tankId: 'tank-1', quantity: 100 }],
+        allocations: [
+          { tankId: 'tank-1', quantity: 40 },
+          { tankId: 'tank-1', quantity: 60 },
+        ],
       };
       const grnReturn = [{ id: 'grn-1' }];
       const detailReturn = {
@@ -149,17 +152,11 @@ describe('DeliveriesService', () => {
         },
       };
 
-      let selectCallCount = 0;
       const tx = {
-        select: jest.fn().mockImplementation(() => ({
-          from: jest.fn().mockImplementation(() => ({
-            where: jest.fn().mockImplementation(() => {
-              selectCallCount++;
-              if (selectCallCount === 1) return Promise.resolve([delivery]);
-              return Promise.resolve([tankRow]);
-            }),
-          })),
-        })),
+        execute: jest.fn()
+          .mockResolvedValueOnce({ rows: [delivery] })
+          .mockResolvedValueOnce({ rows: [tankRow] }),
+        select: jest.fn(),
         insert: jest.fn()
           .mockReturnValueOnce({
             values: () => ({ returning: () => Promise.resolve(grnReturn) }),
@@ -167,7 +164,13 @@ describe('DeliveriesService', () => {
           .mockReturnValue({
             values: () => Promise.resolve(undefined),
           }),
-        update: jest.fn().mockReturnValue({ set: jest.fn().mockReturnValue({ where: jest.fn().mockResolvedValue(undefined) }) }),
+        update: jest.fn().mockReturnValue({
+          set: jest.fn().mockReturnValue({
+            where: jest.fn().mockReturnValue({
+              returning: jest.fn().mockResolvedValue([{ id: deliveryId }]),
+            }),
+          }),
+        }),
       };
       db.transaction.mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx));
 
@@ -185,6 +188,53 @@ describe('DeliveriesService', () => {
       expect(result.status).toBe('completed');
       expect(result.grn?.allocations).toHaveLength(1);
       expect(result.grn?.allocations[0].quantity).toBe('100');
+    });
+
+    it('should aggregate duplicate tank allocations before capacity checks', async () => {
+      const delivery = {
+        id: deliveryId,
+        companyId,
+        branchId,
+        deliveryNote: 'DN-001',
+        supplierId: null,
+        vehicleNo: null,
+        driverName: null,
+        productId: 'product-1',
+        orderedQty: '60',
+        expectedDate: new Date(),
+        receivedQty: null,
+        density: null,
+        temperature: null,
+        status: 'pending',
+        createdAt: new Date(),
+      };
+      const tankRow = {
+        id: 'tank-1',
+        branchId,
+        productId: 'product-1',
+        capacity: '1000',
+        currentLevel: '950',
+      };
+      const dto = {
+        receivedQty: 60,
+        allocations: [
+          { tankId: 'tank-1', quantity: 30 },
+          { tankId: 'tank-1', quantity: 30 },
+        ],
+      };
+      const tx = {
+        execute: jest.fn()
+          .mockResolvedValueOnce({ rows: [delivery] })
+          .mockResolvedValueOnce({ rows: [tankRow] }),
+        insert: jest.fn(),
+        update: jest.fn(),
+      };
+      db.transaction.mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx));
+
+      await expect(service.receiveGrn(deliveryId, dto, { userId })).rejects.toThrow(
+        /free capacity is 50; cannot allocate 60/,
+      );
+      expect(tx.insert).not.toHaveBeenCalled();
     });
   });
 

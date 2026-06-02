@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Groq from 'groq-sdk';
 import type {
@@ -7,9 +7,23 @@ import type {
   ChatCompletion,
 } from 'groq-sdk/resources/chat/completions';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { and, count, desc, eq, gte, ilike, isNull, lte, sql } from 'drizzle-orm';
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  lte,
+  sql,
+  type AnyColumn,
+  type SQL,
+} from 'drizzle-orm';
 import { DRIZZLE } from '../../database/database.module';
 import * as Schema from '../../database/schema';
+import { extractTenantScope, type TenantScope } from '../../common/helpers/scope.helper';
 import type { ChatMessageDto, ConfirmAction, ResponseCardDto } from './dto/chat.dto';
 import { ExportsService } from '../exports/exports.service';
 import { EmailTransport } from '../notifications/transports/email.transport';
@@ -37,6 +51,16 @@ interface ToolDef {
   permission: string;
 }
 
+interface TenantScopedColumns {
+  companyId?: AnyColumn<{ data: string }>;
+  branchId?: AnyColumn<{ data: string }>;
+}
+
+interface TenantEntityScope {
+  companyId: string;
+  branchId?: string;
+}
+
 /** Tracks the last AI-assisted write per user for undo support. */
 interface LastWrite {
   action: ConfirmAction;
@@ -57,6 +81,11 @@ const LIMIT_PROP = {
   limit: { type: 'number' as const, description: 'Max rows to return (default 10, max 50)' },
 };
 
+const TENANT_FILTER_PROPS = {
+  companyId: { type: 'string' as const, description: 'Optional UUID to narrow within your company scope' },
+  branchId: { type: 'string' as const, description: 'Optional UUID to narrow within your branch scope' },
+};
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
@@ -69,6 +98,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         ...DATE_RANGE_PROPS,
         paymentType: {
           type: 'string',
@@ -89,6 +119,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         tankCode: { type: 'string', description: 'Filter by tank code' },
         belowPercent: {
           type: 'number',
@@ -105,6 +136,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         ...DATE_RANGE_PROPS,
         status: {
           type: 'string',
@@ -122,6 +154,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         ...DATE_RANGE_PROPS,
         status: {
           type: 'string',
@@ -139,6 +172,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         ...DATE_RANGE_PROPS,
         status: { type: 'string', description: 'Filter by status (unpaid, partial, paid)' },
         overdue: {
@@ -157,6 +191,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         search: { type: 'string', description: 'Search customer by name (partial match)' },
         status: { type: 'string', description: 'Filter by status (active, inactive)' },
         ...LIMIT_PROP,
@@ -171,6 +206,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         ...DATE_RANGE_PROPS,
         classification: {
           type: 'string',
@@ -189,6 +225,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         reportType: {
           type: 'string',
           description:
@@ -210,6 +247,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         reportType: {
           type: 'string',
           description:
@@ -323,6 +361,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         productName: {
           type: 'string',
           description: 'Filter by product name (e.g. diesel, petrol). Partial match supported.',
@@ -342,6 +381,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         projectionDays: {
           type: 'number',
           description: 'Number of days to project forward (default 14, max 30)',
@@ -361,6 +401,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         ...DATE_RANGE_PROPS,
         productName: {
           type: 'string',
@@ -377,6 +418,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         daysBack: {
           type: 'number',
           description: 'Number of historical days to analyze (default 30, max 90)',
@@ -392,6 +434,7 @@ const TOOL_DEFINITIONS: ToolDef[] = [
     parameters: {
       type: 'object',
       properties: {
+        ...TENANT_FILTER_PROPS,
         metric: {
           type: 'string',
           description:
@@ -451,7 +494,7 @@ Data entry capabilities:
 - When the user wants to create/record data, extract all the details from their message and call the appropriate write tool.
 - The system will show them a confirmation card with the parsed details so they can review and edit before submitting.
 - NEVER execute writes without confirmation — always return a confirmation card first.
-- If the user does not provide a branchId or companyId, try to infer it from context, or use any available scope from their permissions. If unable, ask them to specify.
+- Only use companyId and branchId values that are in the current user's permission scope. If the scoped company or branch is not explicit and cannot be resolved unambiguously, ask the user to specify it.
 - If the user says "undo", "reverse", or "that was wrong", use the undo_last_write tool. Only the most recent AI write (within 10 minutes) can be undone.
 
 Predictive & advisory capabilities:
@@ -577,6 +620,230 @@ export class AiChatService {
       .slice(0, maxLen);
     if (!s) throw new Error(`${fieldName} is required`);
     return s;
+  }
+
+  private static readonly TENANT_UUID_RE =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+  private requireTenantScope(context: ToolContext): TenantScope {
+    const parsed = extractTenantScope(context.permissions ?? []);
+    const scope = {
+      companyIds: [...new Set(parsed.companyIds)],
+      branchIds: [...new Set(parsed.branchIds)],
+    };
+
+    if (scope.companyIds.length === 0 && scope.branchIds.length === 0) {
+      throw new ForbiddenException('No company or branch scopes are assigned to this account');
+    }
+
+    return scope;
+  }
+
+  private validateTenantUuid(value: unknown, fieldName: string): string {
+    const s = String(value ?? '').trim();
+    if (!AiChatService.TENANT_UUID_RE.test(s)) {
+      throw new BadRequestException(`Invalid ${fieldName}: expected a UUID, got "${s}"`);
+    }
+    return s;
+  }
+
+  private validateOptionalTenantUuid(value: unknown, fieldName: string): string | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    return this.validateTenantUuid(value, fieldName);
+  }
+
+  private assertCompanyInScope(companyId: string, scope: TenantScope): void {
+    if (scope.companyIds.length === 0 || !scope.companyIds.includes(companyId)) {
+      throw new ForbiddenException('Requested company is outside your access scope');
+    }
+  }
+
+  private assertBranchInScope(branchId: string, scope: TenantScope): void {
+    if (scope.branchIds.length === 0 || !scope.branchIds.includes(branchId)) {
+      throw new ForbiddenException('Requested branch is outside your access scope');
+    }
+  }
+
+  private resolveSingleCompanyId(scope: TenantScope): string {
+    if (scope.companyIds.length === 1) return scope.companyIds[0];
+    throw new BadRequestException(
+      'companyId is required because your company scope is ambiguous',
+    );
+  }
+
+  private resolveSingleBranchId(scope: TenantScope): string {
+    if (scope.branchIds.length === 1) return scope.branchIds[0];
+    throw new BadRequestException('branchId is required because your branch scope is ambiguous');
+  }
+
+  private tenantScopePredicates(
+    args: Record<string, unknown> | undefined,
+    context: ToolContext,
+    columns: TenantScopedColumns,
+  ): SQL[] {
+    const scope = this.requireTenantScope(context);
+    const requestedCompanyId = this.validateOptionalTenantUuid(args?.companyId, 'companyId');
+    const requestedBranchId = this.validateOptionalTenantUuid(args?.branchId, 'branchId');
+    const predicates: SQL[] = [];
+
+    if (requestedCompanyId) this.assertCompanyInScope(requestedCompanyId, scope);
+    if (requestedBranchId) this.assertBranchInScope(requestedBranchId, scope);
+
+    if (columns.companyId) {
+      if (requestedCompanyId) predicates.push(eq(columns.companyId, requestedCompanyId));
+      else if (scope.companyIds.length > 0) predicates.push(inArray(columns.companyId, scope.companyIds));
+    }
+
+    if (columns.branchId) {
+      if (requestedBranchId) predicates.push(eq(columns.branchId, requestedBranchId));
+      else if (scope.branchIds.length > 0) predicates.push(inArray(columns.branchId, scope.branchIds));
+    }
+
+    if (predicates.length === 0) {
+      throw new ForbiddenException('Tenant scope cannot be applied to this AI request');
+    }
+
+    return predicates;
+  }
+
+  private validateTenantReferencesInPayload(payload: unknown, context: ToolContext): void {
+    const scope = this.requireTenantScope(context);
+    this.walkTenantReferences(payload, 'payload', (field, value, path) => {
+      const id = this.validateTenantUuid(value, path);
+      if (field === 'companyId') this.assertCompanyInScope(id, scope);
+      if (field === 'branchId') this.assertBranchInScope(id, scope);
+    });
+  }
+
+  private walkTenantReferences(
+    value: unknown,
+    path: string,
+    visit: (field: 'companyId' | 'branchId', value: unknown, path: string) => void,
+  ): void {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => this.walkTenantReferences(item, `${path}[${index}]`, visit));
+      return;
+    }
+    if (typeof value !== 'object') return;
+
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const childPath = `${path}.${key}`;
+      if (key === 'companyId' || key === 'branchId') {
+        if (child === undefined || child === null || child === '') continue;
+        visit(key, child, childPath);
+      }
+      this.walkTenantReferences(child, childPath, visit);
+    }
+  }
+
+  private async getAllowedBranchScope(
+    branchId: string,
+    context: ToolContext,
+  ): Promise<Required<TenantEntityScope>> {
+    const scope = this.requireTenantScope(context);
+    this.assertBranchInScope(branchId, scope);
+
+    const [branch] = await this.db
+      .select({ id: Schema.branches.id, companyId: Schema.branches.companyId })
+      .from(Schema.branches)
+      .where(and(eq(Schema.branches.id, branchId), isNull(Schema.branches.deletedAt)))
+      .limit(1);
+
+    if (!branch) throw new BadRequestException('Branch not found');
+    if (scope.companyIds.length > 0) this.assertCompanyInScope(branch.companyId, scope);
+    return { companyId: branch.companyId, branchId: branch.id };
+  }
+
+  private async getAllowedCustomerScope(
+    customerId: string,
+    context: ToolContext,
+  ): Promise<Required<TenantEntityScope>> {
+    const [customer] = await this.db
+      .select({
+        companyId: Schema.customers.companyId,
+        branchId: Schema.customers.branchId,
+      })
+      .from(Schema.customers)
+      .where(and(eq(Schema.customers.id, customerId), isNull(Schema.customers.deletedAt)))
+      .limit(1);
+
+    if (!customer) throw new BadRequestException('Customer not found');
+    this.assertEntityTenantScope(customer, context, 'Customer');
+    return customer;
+  }
+
+  private async getAllowedSaleScope(
+    transactionId: string,
+    context: ToolContext,
+  ): Promise<Required<TenantEntityScope>> {
+    const [sale] = await this.db
+      .select({
+        companyId: Schema.salesTransactions.companyId,
+        branchId: Schema.salesTransactions.branchId,
+      })
+      .from(Schema.salesTransactions)
+      .where(
+        and(eq(Schema.salesTransactions.id, transactionId), isNull(Schema.salesTransactions.deletedAt)),
+      )
+      .limit(1);
+
+    if (!sale) throw new BadRequestException('Sale transaction not found');
+    this.assertEntityTenantScope(sale, context, 'Sale transaction');
+    return sale;
+  }
+
+  private async assertProductScope(
+    productId: string | undefined,
+    context: ToolContext,
+    expectedCompanyId?: string,
+  ): Promise<void> {
+    if (!productId) return;
+
+    const [product] = await this.db
+      .select({ companyId: Schema.products.companyId })
+      .from(Schema.products)
+      .where(and(eq(Schema.products.id, productId), isNull(Schema.products.deletedAt)))
+      .limit(1);
+
+    if (!product) throw new BadRequestException('Product not found');
+    this.assertEntityTenantScope({ companyId: product.companyId }, context, 'Product');
+    if (expectedCompanyId && product.companyId !== expectedCompanyId) {
+      throw new ForbiddenException('Product is outside the selected company scope');
+    }
+  }
+
+  private async assertSupplierScope(
+    supplierId: string | undefined,
+    context: ToolContext,
+    expectedCompanyId?: string,
+  ): Promise<void> {
+    if (!supplierId) return;
+
+    const [supplier] = await this.db
+      .select({ companyId: Schema.suppliers.companyId })
+      .from(Schema.suppliers)
+      .where(and(eq(Schema.suppliers.id, supplierId), isNull(Schema.suppliers.deletedAt)))
+      .limit(1);
+
+    if (!supplier) throw new BadRequestException('Supplier not found');
+    this.assertEntityTenantScope({ companyId: supplier.companyId }, context, 'Supplier');
+    if (expectedCompanyId && supplier.companyId !== expectedCompanyId) {
+      throw new ForbiddenException('Supplier is outside the selected company scope');
+    }
+  }
+
+  private assertEntityTenantScope(
+    entityScope: TenantEntityScope,
+    context: ToolContext,
+    label: string,
+  ): void {
+    const scope = this.requireTenantScope(context);
+    this.assertCompanyInScope(entityScope.companyId, scope);
+    if (entityScope.branchId) this.assertBranchInScope(entityScope.branchId, scope);
+    if (!entityScope.branchId && scope.companyIds.length === 0) {
+      throw new ForbiddenException(`${label} tenant scope cannot be verified`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -901,6 +1168,8 @@ export class AiChatService {
   // -------------------------------------------------------------------------
 
   async getProactiveInsights(context: ToolContext): Promise<ResponseCardDto[]> {
+    this.requireTenantScope(context);
+
     const cards: ResponseCardDto[] = [];
 
     try {
@@ -916,6 +1185,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.tanks.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.tanks.companyId,
+                branchId: Schema.tanks.branchId,
+              }),
               sql`(${Schema.tanks.currentLevel}::numeric / NULLIF(${Schema.tanks.capacity}::numeric, 0)) < 0.2`,
             ),
           );
@@ -948,6 +1221,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.shifts.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.shifts.companyId,
+                branchId: Schema.shifts.branchId,
+              }),
               eq(Schema.shifts.status, 'open'),
               lte(Schema.shifts.startTime, twelveHoursAgo),
             ),
@@ -981,6 +1258,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.salesTransactions.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.salesTransactions.companyId,
+                branchId: Schema.salesTransactions.branchId,
+              }),
               eq(Schema.salesTransactions.status, 'completed'),
               gte(Schema.salesTransactions.transactionDate, todayStart),
             ),
@@ -994,6 +1275,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.salesTransactions.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.salesTransactions.companyId,
+                branchId: Schema.salesTransactions.branchId,
+              }),
               eq(Schema.salesTransactions.status, 'completed'),
               gte(Schema.salesTransactions.transactionDate, thirtyDaysAgo),
               lte(Schema.salesTransactions.transactionDate, todayStart),
@@ -1030,6 +1315,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.customers.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.customers.companyId,
+                branchId: Schema.customers.branchId,
+              }),
               eq(Schema.customers.status, 'active'),
               sql`${Schema.customers.creditLimit}::numeric > 0`,
               sql`(${Schema.customers.balance}::numeric / NULLIF(${Schema.customers.creditLimit}::numeric, 0)) >= 0.9`,
@@ -1066,6 +1355,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.expenseEntries.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.expenseEntries.companyId,
+                branchId: Schema.expenseEntries.branchId,
+              }),
               gte(Schema.expenseEntries.createdAt, currentMonthStart),
             ),
           )
@@ -1080,6 +1373,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.expenseEntries.deletedAt),
+              ...this.tenantScopePredicates(undefined, context, {
+                companyId: Schema.expenseEntries.companyId,
+                branchId: Schema.expenseEntries.branchId,
+              }),
               gte(Schema.expenseEntries.createdAt, priorMonthStart),
               lte(Schema.expenseEntries.createdAt, currentMonthStart),
             ),
@@ -1144,19 +1441,19 @@ export class AiChatService {
   ): Promise<Record<string, unknown>> {
     switch (name) {
       case 'query_sales_summary':
-        return this.querySalesSummary(args);
+        return this.querySalesSummary(args, context);
       case 'query_inventory_levels':
-        return this.queryInventoryLevels(args);
+        return this.queryInventoryLevels(args, context);
       case 'query_shifts':
-        return this.queryShifts(args);
+        return this.queryShifts(args, context);
       case 'query_deliveries':
-        return this.queryDeliveries(args);
+        return this.queryDeliveries(args, context);
       case 'query_credit_invoices':
-        return this.queryCreditInvoices(args);
+        return this.queryCreditInvoices(args, context);
       case 'query_customers':
-        return this.queryCustomers(args);
+        return this.queryCustomers(args, context);
       case 'query_variances':
-        return this.queryVariances(args);
+        return this.queryVariances(args, context);
       case 'generate_report':
         return this.generateReport(args, context);
       case 'email_report':
@@ -1170,15 +1467,15 @@ export class AiChatService {
       case 'void_sale':
         return this.prepareConfirmation('void_sale', args, context);
       case 'forecast_demand':
-        return this.forecastDemand(args);
+        return this.forecastDemand(args, context);
       case 'project_cashflow':
-        return this.projectCashflow(args);
+        return this.projectCashflow(args, context);
       case 'analyze_pricing':
-        return this.analyzePricing(args);
+        return this.analyzePricing(args, context);
       case 'recommend_staffing':
-        return this.recommendStaffing(args);
+        return this.recommendStaffing(args, context);
       case 'analyze_trends':
-        return this.analyzeTrends(args);
+        return this.analyzeTrends(args, context);
       case 'undo_last_write':
         return this.undoLastWrite(args, context);
       default:
@@ -1190,8 +1487,17 @@ export class AiChatService {
   // Query helpers
   // -------------------------------------------------------------------------
 
-  private async querySalesSummary(args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const conditions = [isNull(Schema.salesTransactions.deletedAt)];
+  private async querySalesSummary(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
+    const conditions: SQL[] = [
+      isNull(Schema.salesTransactions.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.salesTransactions.companyId,
+        branchId: Schema.salesTransactions.branchId,
+      }),
+    ];
 
     if (args.dateFrom) {
       conditions.push(
@@ -1244,8 +1550,15 @@ export class AiChatService {
 
   private async queryInventoryLevels(
     args: Record<string, unknown>,
+    context: ToolContext,
   ): Promise<Record<string, unknown>> {
-    const conditions = [isNull(Schema.tanks.deletedAt)];
+    const conditions: SQL[] = [
+      isNull(Schema.tanks.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.tanks.companyId,
+        branchId: Schema.tanks.branchId,
+      }),
+    ];
 
     if (args.tankCode) {
       conditions.push(eq(Schema.tanks.code, args.tankCode as string));
@@ -1282,9 +1595,18 @@ export class AiChatService {
     return { rows: result };
   }
 
-  private async queryShifts(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async queryShifts(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const limit = Math.min(Number(args.limit) || 10, 50);
-    const conditions = [isNull(Schema.shifts.deletedAt)];
+    const conditions: SQL[] = [
+      isNull(Schema.shifts.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.shifts.companyId,
+        branchId: Schema.shifts.branchId,
+      }),
+    ];
 
     if (args.dateFrom) {
       conditions.push(gte(Schema.shifts.startTime, new Date(args.dateFrom as string)));
@@ -1328,9 +1650,18 @@ export class AiChatService {
     };
   }
 
-  private async queryDeliveries(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async queryDeliveries(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const limit = Math.min(Number(args.limit) || 10, 50);
-    const conditions = [isNull(Schema.deliveries.deletedAt)];
+    const conditions: SQL[] = [
+      isNull(Schema.deliveries.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.deliveries.companyId,
+        branchId: Schema.deliveries.branchId,
+      }),
+    ];
 
     if (args.dateFrom) {
       conditions.push(gte(Schema.deliveries.createdAt, new Date(args.dateFrom as string)));
@@ -1373,9 +1704,16 @@ export class AiChatService {
 
   private async queryCreditInvoices(
     args: Record<string, unknown>,
+    context: ToolContext,
   ): Promise<Record<string, unknown>> {
     const limit = Math.min(Number(args.limit) || 10, 50);
-    const conditions = [isNull(Schema.creditInvoices.deletedAt)];
+    const conditions: SQL[] = [
+      isNull(Schema.creditInvoices.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.creditInvoices.companyId,
+        branchId: Schema.creditInvoices.branchId,
+      }),
+    ];
 
     if (args.dateFrom) {
       conditions.push(gte(Schema.creditInvoices.invoiceDate, new Date(args.dateFrom as string)));
@@ -1420,9 +1758,18 @@ export class AiChatService {
     };
   }
 
-  private async queryCustomers(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async queryCustomers(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const limit = Math.min(Number(args.limit) || 10, 50);
-    const conditions = [isNull(Schema.customers.deletedAt)];
+    const conditions: SQL[] = [
+      isNull(Schema.customers.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.customers.companyId,
+        branchId: Schema.customers.branchId,
+      }),
+    ];
 
     if (args.search) {
       conditions.push(ilike(Schema.customers.name, `%${args.search}%`));
@@ -1458,9 +1805,18 @@ export class AiChatService {
     };
   }
 
-  private async queryVariances(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async queryVariances(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const limit = Math.min(Number(args.limit) || 10, 50);
-    const conditions = [isNull(Schema.variances.deletedAt)];
+    const conditions: SQL[] = [
+      isNull(Schema.variances.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.variances.companyId,
+        branchId: Schema.variances.branchId,
+      }),
+    ];
 
     if (args.dateFrom) {
       conditions.push(gte(Schema.variances.varianceDate, new Date(args.dateFrom as string)));
@@ -1529,17 +1885,19 @@ export class AiChatService {
     }
 
     const exportType = `reports.${reportType}` as ExportType;
-    const params: Record<string, unknown> = {};
-    if (args.dateFrom) params.dateFrom = args.dateFrom;
-    if (args.dateTo) params.dateTo = args.dateTo;
-
-    const user: JwtPayloadUser = {
-      sub: context.userId,
-      email: context.email,
-      permissions: context.permissions,
-    };
 
     try {
+      const tenantParams = await this.resolveReportTenantParams(args, context);
+      const params: Record<string, unknown> = { ...tenantParams };
+      if (args.dateFrom) params.dateFrom = args.dateFrom;
+      if (args.dateTo) params.dateTo = args.dateTo;
+
+      const user: JwtPayloadUser = {
+        sub: context.userId,
+        email: context.email,
+        permissions: context.permissions,
+      };
+
       const result = await this.exportsService.createExport(
         { exportType, format: format as 'pdf' | 'csv', params },
         user,
@@ -1555,8 +1913,33 @@ export class AiChatService {
       };
     } catch (err) {
       this.logger.error('Report generation error', (err as Error).stack);
-      return { error: 'Failed to queue report generation. Please try again.' };
+      return { error: (err as Error).message || 'Failed to queue report generation.' };
     }
+  }
+
+  private async resolveReportTenantParams(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<{ companyId: string; branchId?: string }> {
+    const scope = this.requireTenantScope(context);
+    let companyId = this.validateOptionalTenantUuid(args.companyId, 'companyId');
+    const branchId = this.validateOptionalTenantUuid(args.branchId, 'branchId');
+
+    if (branchId) {
+      const branchScope = await this.getAllowedBranchScope(branchId, context);
+      if (companyId && companyId !== branchScope.companyId) {
+        throw new ForbiddenException('Requested branch is outside the selected company scope');
+      }
+      companyId = branchScope.companyId;
+    }
+
+    if (companyId) {
+      this.assertCompanyInScope(companyId, scope);
+    } else {
+      companyId = this.resolveSingleCompanyId(scope);
+    }
+
+    return branchId ? { companyId, branchId } : { companyId };
   }
 
   private async emailReport(
@@ -1627,6 +2010,131 @@ export class AiChatService {
     this.logger.warn(`Report ${exportId} timed out — email not sent to ${recipientEmail}`);
   }
 
+  private async resolveScopedConfirmationPayload(
+    action: ConfirmAction,
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
+    this.validateTenantReferencesInPayload(args, context);
+    const scope = this.requireTenantScope(context);
+    const payload = { ...args };
+
+    switch (action) {
+      case 'create_delivery': {
+        let branchId = this.validateOptionalTenantUuid(payload.branchId, 'branchId');
+        if (!branchId) {
+          branchId = this.resolveSingleBranchId(scope);
+          payload.branchId = branchId;
+        }
+        const branchScope = await this.getAllowedBranchScope(branchId, context);
+        const companyId = this.validateOptionalTenantUuid(payload.companyId, 'companyId');
+        if (companyId && companyId !== branchScope.companyId) {
+          throw new ForbiddenException('Requested branch is outside the selected company scope');
+        }
+        payload.companyId = companyId ?? branchScope.companyId;
+        await this.assertProductScope(
+          this.validateOptionalUuid(payload.productId, 'productId'),
+          context,
+          branchScope.companyId,
+        );
+        await this.assertSupplierScope(
+          this.validateOptionalUuid(payload.supplierId, 'supplierId'),
+          context,
+          branchScope.companyId,
+        );
+        break;
+      }
+
+      case 'create_expense': {
+        let branchId = this.validateOptionalTenantUuid(payload.branchId, 'branchId');
+        if (!branchId) {
+          branchId = this.resolveSingleBranchId(scope);
+          payload.branchId = branchId;
+        }
+        const branchScope = await this.getAllowedBranchScope(branchId, context);
+        const companyId =
+          this.validateOptionalTenantUuid(payload.companyId, 'companyId') ?? branchScope.companyId;
+        this.assertCompanyInScope(companyId, scope);
+        if (companyId !== branchScope.companyId) {
+          throw new ForbiddenException('Requested branch is outside the selected company scope');
+        }
+        payload.companyId = companyId;
+        await this.assertExpenseCategoryScope(
+          this.validateOptionalUuid(payload.categoryId, 'categoryId'),
+          context,
+          companyId,
+          branchId,
+        );
+        break;
+      }
+
+      case 'record_payment': {
+        const customerId = this.validateOptionalUuid(payload.customerId, 'customerId');
+        if (customerId) {
+          const customerScope = await this.getAllowedCustomerScope(customerId, context);
+          this.assertPayloadScopeMatchesEntity(payload, customerScope, 'Customer');
+          payload.companyId = payload.companyId ?? customerScope.companyId;
+          payload.branchId = payload.branchId ?? customerScope.branchId;
+        }
+        break;
+      }
+
+      case 'void_sale': {
+        const transactionId = this.validateOptionalUuid(payload.transactionId, 'transactionId');
+        if (transactionId) {
+          const saleScope = await this.getAllowedSaleScope(transactionId, context);
+          this.assertPayloadScopeMatchesEntity(payload, saleScope, 'Sale transaction');
+          payload.companyId = payload.companyId ?? saleScope.companyId;
+          payload.branchId = payload.branchId ?? saleScope.branchId;
+        }
+        break;
+      }
+    }
+
+    this.validateTenantReferencesInPayload(payload, context);
+    return payload;
+  }
+
+  private async assertExpenseCategoryScope(
+    categoryId: string | undefined,
+    context: ToolContext,
+    expectedCompanyId: string,
+    expectedBranchId: string,
+  ): Promise<void> {
+    if (!categoryId) return;
+
+    const [category] = await this.db
+      .select({
+        companyId: Schema.expenseCategories.companyId,
+        branchId: Schema.expenseCategories.branchId,
+      })
+      .from(Schema.expenseCategories)
+      .where(and(eq(Schema.expenseCategories.id, categoryId), isNull(Schema.expenseCategories.deletedAt)))
+      .limit(1);
+
+    if (!category) throw new BadRequestException('Expense category not found');
+    this.assertEntityTenantScope(category, context, 'Expense category');
+    if (category.companyId !== expectedCompanyId || category.branchId !== expectedBranchId) {
+      throw new ForbiddenException('Expense category is outside the selected branch scope');
+    }
+  }
+
+  private assertPayloadScopeMatchesEntity(
+    payload: Record<string, unknown>,
+    entityScope: Required<TenantEntityScope>,
+    label: string,
+  ): void {
+    const payloadCompanyId = this.validateOptionalTenantUuid(payload.companyId, 'companyId');
+    const payloadBranchId = this.validateOptionalTenantUuid(payload.branchId, 'branchId');
+
+    if (payloadCompanyId && payloadCompanyId !== entityScope.companyId) {
+      throw new ForbiddenException(`${label} is outside the selected company scope`);
+    }
+    if (payloadBranchId && payloadBranchId !== entityScope.branchId) {
+      throw new ForbiddenException(`${label} is outside the selected branch scope`);
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Confirmation card preparation (write tools)
   // -------------------------------------------------------------------------
@@ -1636,32 +2144,28 @@ export class AiChatService {
     args: Record<string, unknown>,
     context: ToolContext,
   ): Promise<Record<string, unknown>> {
-    // Resolve branchId/companyId from user scopes if not provided
-    const scopes = context.permissions;
-    if (!args.branchId) {
-      const branchScope = scopes.find((p) => p.startsWith('branch:'));
-      if (branchScope) args.branchId = branchScope.replace('branch:', '');
-    }
-    if (!args.companyId) {
-      const companyScope = scopes.find((p) => p.startsWith('company:'));
-      if (companyScope) args.companyId = companyScope.replace('company:', '');
+    let scopedArgs: Record<string, unknown>;
+    try {
+      scopedArgs = await this.resolveScopedConfirmationPayload(action, args, context);
+    } catch (err) {
+      return { error: (err as Error).message || 'Unable to resolve tenant scope for this action.' };
     }
 
     // Enrich with human-readable labels for customer/product names
-    const enriched = { ...args } as Record<string, unknown>;
-    if (args.customerId) {
+    const enriched = { ...scopedArgs } as Record<string, unknown>;
+    if (scopedArgs.customerId) {
       const [cust] = await this.db
         .select({ name: Schema.customers.name })
         .from(Schema.customers)
-        .where(eq(Schema.customers.id, args.customerId as string))
+        .where(eq(Schema.customers.id, scopedArgs.customerId as string))
         .limit(1);
       if (cust) enriched._customerName = cust.name;
     }
-    if (args.productId) {
+    if (scopedArgs.productId) {
       const [prod] = await this.db
         .select({ name: Schema.products.name })
         .from(Schema.products)
-        .where(eq(Schema.products.id, args.productId as string))
+        .where(eq(Schema.products.id, scopedArgs.productId as string))
         .limit(1);
       if (prod) enriched._productName = prod.name;
     }
@@ -1701,11 +2205,27 @@ export class AiChatService {
     const auditCtx = { userId: context.userId, userAgent: 'ai-assistant' };
 
     try {
+      this.validateTenantReferencesInPayload(payload, context);
       let entityId: string | undefined;
 
       switch (action) {
         case 'create_delivery': {
           const branchId = this.validateUuid(payload.branchId, 'branchId');
+          const branchScope = await this.getAllowedBranchScope(branchId, context);
+          const payloadCompanyId = this.validateOptionalTenantUuid(payload.companyId, 'companyId');
+          if (payloadCompanyId && payloadCompanyId !== branchScope.companyId) {
+            throw new ForbiddenException('Requested branch is outside the selected company scope');
+          }
+          await this.assertProductScope(
+            this.validateOptionalUuid(payload.productId, 'productId'),
+            context,
+            branchScope.companyId,
+          );
+          await this.assertSupplierScope(
+            this.validateOptionalUuid(payload.supplierId, 'supplierId'),
+            context,
+            branchScope.companyId,
+          );
           const orderedQty = this.validatePositiveNumber(payload.orderedQty, 'orderedQty');
           const deliveryNote = this.validateString(
             payload.deliveryNote || `DEL-${Date.now()}`,
@@ -1740,6 +2260,18 @@ export class AiChatService {
         case 'create_expense': {
           const companyId = this.validateUuid(payload.companyId, 'companyId');
           const branchId = this.validateUuid(payload.branchId, 'branchId');
+          const branchScope = await this.getAllowedBranchScope(branchId, context);
+          const scope = this.requireTenantScope(context);
+          this.assertCompanyInScope(companyId, scope);
+          if (companyId !== branchScope.companyId) {
+            throw new ForbiddenException('Requested branch is outside the selected company scope');
+          }
+          await this.assertExpenseCategoryScope(
+            this.validateOptionalUuid(payload.categoryId, 'categoryId'),
+            context,
+            companyId,
+            branchId,
+          );
           const amount = this.validatePositiveNumber(payload.amount, 'amount');
           const category = this.validateString(payload.category, 'category', 100);
           const result = await this.expensesService.createExpenseEntry(
@@ -1772,6 +2304,8 @@ export class AiChatService {
 
         case 'record_payment': {
           const customerId = this.validateUuid(payload.customerId, 'customerId');
+          const customerScope = await this.getAllowedCustomerScope(customerId, context);
+          this.assertPayloadScopeMatchesEntity(payload, customerScope, 'Customer');
           const amount = this.validatePositiveNumber(payload.amount, 'amount');
           const result = await this.paymentsService.create(
             {
@@ -1796,6 +2330,8 @@ export class AiChatService {
 
         case 'void_sale': {
           const txId = this.validateUuid(payload.transactionId, 'transactionId');
+          const saleScope = await this.getAllowedSaleScope(txId, context);
+          this.assertPayloadScopeMatchesEntity(payload, saleScope, 'Sale transaction');
           const reason = payload.reason
             ? String(payload.reason).slice(0, 500)
             : 'Voided via AI assistant';
@@ -1897,12 +2433,21 @@ export class AiChatService {
   // Predictive & Advisory tools (Phase 4) — all results are ESTIMATES
   // -------------------------------------------------------------------------
 
-  private async forecastDemand(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async forecastDemand(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const daysBack = Math.min(Math.max(Number(args.daysBack) || 60, 7), 180);
     const since = new Date(Date.now() - daysBack * 86_400_000);
 
     // Get current tank levels with product info
-    const tankConditions = [isNull(Schema.tanks.deletedAt)];
+    const tankConditions: SQL[] = [
+      isNull(Schema.tanks.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.tanks.companyId,
+        branchId: Schema.tanks.branchId,
+      }),
+    ];
     const tanks = await this.db
       .select({
         tankCode: Schema.tanks.code,
@@ -1927,6 +2472,10 @@ export class AiChatService {
       .where(
         and(
           isNull(Schema.deliveries.deletedAt),
+          ...this.tenantScopePredicates(args, context, {
+            companyId: Schema.deliveries.companyId,
+            branchId: Schema.deliveries.branchId,
+          }),
           eq(Schema.deliveries.status, 'received'),
           gte(Schema.deliveries.createdAt, since),
         ),
@@ -1982,7 +2531,10 @@ export class AiChatService {
     };
   }
 
-  private async projectCashflow(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async projectCashflow(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const projectionDays = Math.min(Math.max(Number(args.projectionDays) || 14, 7), 30);
     const daysBack = Math.min(Math.max(Number(args.daysBack) || 30, 7), 90);
     const since = new Date(Date.now() - daysBack * 86_400_000);
@@ -1997,6 +2549,10 @@ export class AiChatService {
       .where(
         and(
           isNull(Schema.salesTransactions.deletedAt),
+          ...this.tenantScopePredicates(args, context, {
+            companyId: Schema.salesTransactions.companyId,
+            branchId: Schema.salesTransactions.branchId,
+          }),
           gte(Schema.salesTransactions.transactionDate, since),
           eq(Schema.salesTransactions.status, 'completed'),
         ),
@@ -2010,7 +2566,14 @@ export class AiChatService {
       })
       .from(Schema.expenseEntries)
       .where(
-        and(isNull(Schema.expenseEntries.deletedAt), gte(Schema.expenseEntries.createdAt, since)),
+        and(
+          isNull(Schema.expenseEntries.deletedAt),
+          ...this.tenantScopePredicates(args, context, {
+            companyId: Schema.expenseEntries.companyId,
+            branchId: Schema.expenseEntries.branchId,
+          }),
+          gte(Schema.expenseEntries.createdAt, since),
+        ),
       );
 
     // Historical credit payments received
@@ -2020,7 +2583,15 @@ export class AiChatService {
         payDays: sql<string>`COUNT(DISTINCT DATE(${Schema.payments.paymentDate}))`,
       })
       .from(Schema.payments)
-      .where(gte(Schema.payments.paymentDate, since));
+      .where(
+        and(
+          ...this.tenantScopePredicates(args, context, {
+            companyId: Schema.payments.companyId,
+            branchId: Schema.payments.branchId,
+          }),
+          gte(Schema.payments.paymentDate, since),
+        ),
+      );
 
     const totalRevenue = Number(salesData[0]?.totalRevenue ?? 0);
     const activeSalesDays = Math.max(Number(salesData[0]?.txDays ?? 1), 1);
@@ -2064,9 +2635,16 @@ export class AiChatService {
     };
   }
 
-  private async analyzePricing(args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const conditions = [
+  private async analyzePricing(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
+    const conditions: SQL[] = [
       isNull(Schema.salesTransactions.deletedAt),
+      ...this.tenantScopePredicates(args, context, {
+        companyId: Schema.salesTransactions.companyId,
+        branchId: Schema.salesTransactions.branchId,
+      }),
       eq(Schema.salesTransactions.status, 'completed'),
     ];
 
@@ -2095,7 +2673,14 @@ export class AiChatService {
         category: Schema.products.category,
       })
       .from(Schema.products)
-      .where(isNull(Schema.products.deletedAt));
+      .where(
+        and(
+          isNull(Schema.products.deletedAt),
+          ...this.tenantScopePredicates(args, context, {
+            companyId: Schema.products.companyId,
+          }),
+        ),
+      );
 
     // Sales aggregated by product (via nozzle → tank → product chain or directly if available)
     // Simplified: aggregate total sales and transaction counts
@@ -2152,7 +2737,10 @@ export class AiChatService {
     };
   }
 
-  private async recommendStaffing(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async recommendStaffing(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const daysBack = Math.min(Math.max(Number(args.daysBack) || 30, 7), 90);
     const since = new Date(Date.now() - daysBack * 86_400_000);
 
@@ -2168,6 +2756,10 @@ export class AiChatService {
       .where(
         and(
           isNull(Schema.shifts.deletedAt),
+          ...this.tenantScopePredicates(args, context, {
+            companyId: Schema.shifts.companyId,
+            branchId: Schema.shifts.branchId,
+          }),
           eq(Schema.shifts.status, 'closed'),
           gte(Schema.shifts.startTime, since),
         ),
@@ -2241,7 +2833,10 @@ export class AiChatService {
     };
   }
 
-  private async analyzeTrends(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async analyzeTrends(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
     const metric = ((args.metric as string) || 'sales').toLowerCase();
     const periodDays = Math.min(Math.max(Number(args.periodDays) || 30, 7), 90);
 
@@ -2265,6 +2860,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.salesTransactions.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.salesTransactions.companyId,
+                branchId: Schema.salesTransactions.branchId,
+              }),
               eq(Schema.salesTransactions.status, 'completed'),
               gte(Schema.salesTransactions.transactionDate, currentStart),
             ),
@@ -2278,6 +2877,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.salesTransactions.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.salesTransactions.companyId,
+                branchId: Schema.salesTransactions.branchId,
+              }),
               eq(Schema.salesTransactions.status, 'completed'),
               gte(Schema.salesTransactions.transactionDate, previousStart),
               lte(Schema.salesTransactions.transactionDate, previousEnd),
@@ -2299,6 +2902,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.expenseEntries.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.expenseEntries.companyId,
+                branchId: Schema.expenseEntries.branchId,
+              }),
               gte(Schema.expenseEntries.createdAt, currentStart),
             ),
           );
@@ -2311,6 +2918,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.expenseEntries.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.expenseEntries.companyId,
+                branchId: Schema.expenseEntries.branchId,
+              }),
               gte(Schema.expenseEntries.createdAt, previousStart),
               lte(Schema.expenseEntries.createdAt, previousEnd),
             ),
@@ -2331,6 +2942,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.deliveries.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.deliveries.companyId,
+                branchId: Schema.deliveries.branchId,
+              }),
               eq(Schema.deliveries.status, 'received'),
               gte(Schema.deliveries.createdAt, currentStart),
             ),
@@ -2344,6 +2959,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.deliveries.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.deliveries.companyId,
+                branchId: Schema.deliveries.branchId,
+              }),
               eq(Schema.deliveries.status, 'received'),
               gte(Schema.deliveries.createdAt, previousStart),
               lte(Schema.deliveries.createdAt, previousEnd),
@@ -2365,6 +2984,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.creditInvoices.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.creditInvoices.companyId,
+                branchId: Schema.creditInvoices.branchId,
+              }),
               gte(Schema.creditInvoices.invoiceDate, currentStart),
             ),
           );
@@ -2377,6 +3000,10 @@ export class AiChatService {
           .where(
             and(
               isNull(Schema.creditInvoices.deletedAt),
+              ...this.tenantScopePredicates(args, context, {
+                companyId: Schema.creditInvoices.companyId,
+                branchId: Schema.creditInvoices.branchId,
+              }),
               gte(Schema.creditInvoices.invoiceDate, previousStart),
               lte(Schema.creditInvoices.invoiceDate, previousEnd),
             ),

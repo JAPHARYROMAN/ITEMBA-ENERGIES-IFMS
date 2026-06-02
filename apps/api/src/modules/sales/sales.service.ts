@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -23,18 +22,19 @@ import { salePayments } from '../../database/schema/sales/sale-payments';
 import { receipts } from '../../database/schema/sales/receipts';
 import { branches } from '../../database/schema/core/branches';
 import { stations } from '../../database/schema/core/stations';
+import { shifts, SHIFT_STATUS_OPEN } from '../../database/schema/operations/shifts';
 import { products } from '../../database/schema/setup/products';
 import { nozzles } from '../../database/schema/setup/nozzles';
 import { tanks } from '../../database/schema/setup/tanks';
 import {
   stockLedger,
   STOCK_LEDGER_MOVEMENT_SALE,
-  STOCK_LEDGER_MOVEMENT_VOID_REVERSAL,
 } from '../../database/schema/inventory/stock-ledger';
 import { getListParams } from '../../common/helpers/list.helper';
 import { AuditService } from '../audit/audit.service';
 import { GovernanceService } from '../governance/governance.service';
 import type { CreatePosSaleDto } from './dto/create-pos-sale.dto';
+import { applySaleVoidReversal } from './sale-void-reversal';
 
 type Schema = typeof schema;
 
@@ -254,6 +254,24 @@ export class SalesService {
         .from(stations)
         .where(and(eq(stations.id, branch.stationId), isNull(stations.deletedAt)));
       if (!station) throw new NotFoundException('Station not found');
+
+      if (dto.shiftId) {
+        const [shift] = await tx
+          .select({ id: shifts.id })
+          .from(shifts)
+          .where(
+            and(
+              eq(shifts.id, dto.shiftId),
+              eq(shifts.branchId, dto.branchId),
+              eq(shifts.stationId, branch.stationId),
+              eq(shifts.status, SHIFT_STATUS_OPEN),
+              isNull(shifts.deletedAt),
+            ),
+          );
+        if (!shift) {
+          throw new BadRequestException('shiftId must belong to an open shift for the sale branch');
+        }
+      }
 
       const productIds = [...new Set(dto.items.map((i) => i.productId))];
       const nozzleIds = [...new Set(dto.items.map((i) => i.nozzleId))];
@@ -484,16 +502,26 @@ export class SalesService {
     reason: string,
     ctx: AuditContext,
   ): Promise<SaleTransactionDetail> {
+    const voidReason = reason.trim();
     const [existing] = await this.db
       .select()
       .from(salesTransactions)
       .where(and(eq(salesTransactions.id, id), isNull(salesTransactions.deletedAt)));
     if (!existing) throw new NotFoundException('Sale transaction not found');
     if (existing.status === SALE_STATUS_VOIDED) {
-      throw new BadRequestException('Transaction is already voided');
+      await this.db.transaction(async (tx) => {
+        await applySaleVoidReversal(
+          tx as NodePgDatabase<Schema>,
+          this.audit,
+          id,
+          voidReason,
+          ctx,
+        );
+      });
+      return this.findById(id);
     }
     if (existing.status === SALE_STATUS_PENDING_VOID_APPROVAL) {
-      throw new BadRequestException('Transaction void is already pending approval');
+      return this.findById(id);
     }
 
     const governanceRequest = await this.governance.initiateControlledActionRequest(
@@ -504,9 +532,9 @@ export class SalesService {
         entityId: existing.id,
         actionType: 'void',
         amount: Number(existing.totalAmount),
-        reason: reason.trim(),
+        reason: voidReason,
         meta: {
-          voidReason: reason.trim(),
+          voidReason,
           amount: Number(existing.totalAmount),
         },
       },
@@ -516,107 +544,73 @@ export class SalesService {
 
     if (governanceRequest) {
       const nowPending = new Date();
-      await this.db
-        .update(salesTransactions)
-        .set({
-          status: SALE_STATUS_PENDING_VOID_APPROVAL,
-          voidReason: reason.trim(),
-          updatedAt: nowPending,
-          updatedBy: ctx.userId,
-        })
-        .where(eq(salesTransactions.id, id));
+      await this.db.transaction(async (tx) => {
+        const [locked] = (
+          await tx.execute<{ status: string }>(sql`
+            SELECT status
+            FROM sales_transactions
+            WHERE id = ${id}
+              AND deleted_at IS NULL
+            FOR UPDATE
+          `)
+        ).rows;
+        if (!locked) throw new NotFoundException('Sale transaction not found');
+        if (locked.status === SALE_STATUS_VOIDED || locked.status === SALE_STATUS_PENDING_VOID_APPROVAL) {
+          return;
+        }
 
-      await this.audit.log({
-        entity: 'sales_transactions',
-        entityId: id,
-        action: 'void_submitted_for_approval',
-        before: existing as object,
-        after: {
-          ...existing,
-          status: SALE_STATUS_PENDING_VOID_APPROVAL,
-          voidReason: reason.trim(),
-        } as object,
-        userId: ctx.userId,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
+        const [pending] = await tx
+          .update(salesTransactions)
+          .set({
+            status: SALE_STATUS_PENDING_VOID_APPROVAL,
+            voidReason,
+            updatedAt: nowPending,
+            updatedBy: ctx.userId,
+          })
+          .where(
+            and(
+              eq(salesTransactions.id, id),
+              eq(salesTransactions.status, SALE_STATUS_COMPLETED),
+              isNull(salesTransactions.deletedAt),
+            ),
+          )
+          .returning({
+            id: salesTransactions.id,
+            status: salesTransactions.status,
+            voidReason: salesTransactions.voidReason,
+          });
+        if (!pending) return;
+
+        await this.audit.log(
+          {
+            entity: 'sales_transactions',
+            entityId: id,
+            action: 'void_submitted_for_approval',
+            before: existing as object,
+            after: {
+              ...existing,
+              status: SALE_STATUS_PENDING_VOID_APPROVAL,
+              voidReason,
+            } as object,
+            userId: ctx.userId,
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+          tx as NodePgDatabase<Schema>,
+        );
       });
 
       return this.findById(id);
     }
 
-    const now = new Date();
-    const [updated] = await this.db
-      .update(salesTransactions)
-      .set({
-        status: SALE_STATUS_VOIDED,
-        voidedAt: now,
-        voidedBy: ctx.userId,
-        voidReason: reason.trim(),
-        updatedAt: now,
-        updatedBy: ctx.userId,
-      })
-      .where(eq(salesTransactions.id, id))
-      .returning({
-        id: salesTransactions.id,
-        status: salesTransactions.status,
-        voidedAt: salesTransactions.voidedAt,
-        voidedBy: salesTransactions.voidedBy,
-        voidReason: salesTransactions.voidReason,
-      });
-
-    if (!updated) throw new InternalServerErrorException('Failed to void sale transaction');
-
-    // Reverse stock ledger entries for the voided sale
-    const originalEntries = await this.db
-      .select()
-      .from(stockLedger)
-      .where(
-        and(
-          eq(stockLedger.referenceId, id),
-          eq(stockLedger.movementType, STOCK_LEDGER_MOVEMENT_SALE),
-        ),
+    await this.db.transaction(async (tx) => {
+      await applySaleVoidReversal(
+        tx as NodePgDatabase<Schema>,
+        this.audit,
+        id,
+        voidReason,
+        ctx,
       );
-    for (const entry of originalEntries) {
-      const reversalQty = (Number(entry.quantity) * -1).toFixed(3);
-      await this.db.insert(stockLedger).values({
-        companyId: entry.companyId,
-        branchId: entry.branchId,
-        tankId: entry.tankId,
-        productId: entry.productId,
-        movementType: STOCK_LEDGER_MOVEMENT_VOID_REVERSAL,
-        referenceType: 'void_reversal',
-        referenceId: id,
-        quantity: reversalQty,
-        movementDate: now,
-        createdBy: ctx.userId,
-        updatedBy: ctx.userId,
-      });
-      // Restore tank level
-      await this.db
-        .update(tanks)
-        .set({
-          currentLevel: sql`(COALESCE(CAST(${tanks.currentLevel} AS numeric), 0) + ${Number(reversalQty)})::text`,
-          updatedAt: now,
-          updatedBy: ctx.userId,
-        })
-        .where(eq(tanks.id, entry.tankId));
-    }
-
-    await this.audit.log({
-      entity: 'sales_transactions',
-      entityId: id,
-      action: 'void',
-      before: existing as object,
-      after: {
-        ...existing,
-        status: SALE_STATUS_VOIDED,
-        voidedAt: now,
-        voidedBy: ctx.userId,
-        voidReason: reason.trim(),
-      } as object,
-      userId: ctx.userId,
-      ip: ctx.ip,
-      userAgent: ctx.userAgent,
     });
 
     return this.findById(id);

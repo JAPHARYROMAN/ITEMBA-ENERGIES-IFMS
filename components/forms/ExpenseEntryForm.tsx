@@ -57,6 +57,7 @@ export const ExpenseEntryForm: React.FC<{
     },
     onSuccess: (saved: any) => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['governance-approvals'] });
       const approvalId = saved?.governanceApprovalRequestId;
       const approvalStatus = String(saved?.governanceApprovalStatus ?? '').toLowerCase();
       if (!isExisting && (approvalId || approvalStatus === 'submitted')) {
@@ -93,6 +94,7 @@ export const ExpenseEntryForm: React.FC<{
       expenseRepo.updateStatus(id, status, reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['governance-approvals'] });
       addToast('Status updated successfully', 'success');
       setRejecting(false);
       onSuccess();
