@@ -33,8 +33,8 @@ export function DipForm({ onSuccess, onCancel }: { onSuccess: () => void; onCanc
       addToast('Dip recorded successfully', 'success');
       onSuccess();
     },
-    onError: (err: any) => {
-      addToast(err?.message ?? 'Failed to record dip', 'error');
+    onError: (err: unknown) => {
+      addToast(err instanceof Error ? err.message : 'Failed to record dip', 'error');
     },
   });
 
@@ -42,20 +42,24 @@ export function DipForm({ onSuccess, onCancel }: { onSuccess: () => void; onCanc
     <form onSubmit={handleSubmit((v) => mutation.mutateAsync(v))} className="space-y-4 p-4">
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Tank ID</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- TextField registers without rules; converting drops the inline `required` validation, changing submit behavior. */}
         <input {...register('tankId', { required: 'Required' })} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" placeholder="Tank UUID" />
         {errors.tankId && <p className="text-xs text-rose-600">{errors.tankId.message}</p>}
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Volume (L)</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- NumberField registers with valueAsNumber and no rules; converting drops the inline `required` validation and changes the value type. */}
         <input {...register('volume', { required: 'Required' })} type="number" step="0.01" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
         {errors.volume && <p className="text-xs text-rose-600">{errors.volume.message}</p>}
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Water Level (mm)</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- NumberField uses valueAsNumber (empty -> NaN), changing the string value type this form relies on for its `value ? Number(value) : undefined` guard. */}
         <input {...register('waterLevel')} type="number" step="0.1" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Temperature (°C)</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- NumberField uses valueAsNumber (empty -> NaN), changing the string value type this form relies on for its `value ? Number(value) : undefined` guard. */}
         <input {...register('temperature')} type="number" step="0.1" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
       </div>
       <div className="flex gap-2 pt-2">

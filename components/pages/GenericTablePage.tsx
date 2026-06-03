@@ -70,7 +70,7 @@ export function GenericTablePage<T extends { id?: string | number }>({
         addToast(msg, 'error');
       }
     },
-    [onDeleteRow, canDelete, queryClient, queryKey, entityName, addToast],
+    [onDeleteRow, canDelete, queryClient, queryKey, entityName, addToast, t],
   );
 
   const { data, isLoading, isError, error } = useQuery({
@@ -84,7 +84,7 @@ export function GenericTablePage<T extends { id?: string | number }>({
       const msg = err?.apiError?.message ?? err?.message ?? t('common.loading');
       addToast(msg, 'error');
     }
-  }, [isError, error, addToast]);
+  }, [isError, error, addToast, t]);
 
   const filteredData = React.useMemo(() => {
     if (!data) return [];

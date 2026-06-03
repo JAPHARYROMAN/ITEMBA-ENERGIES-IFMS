@@ -8,17 +8,16 @@ import ReportFilters from '../reports/ReportFilters';
 import StatCard from '../ifms/StatCard';
 import { IFMSDataTable } from '../ifms/DataTable';
 import DetailsDrawer from '../ifms/DetailsDrawer';
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+import {
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area
 } from 'recharts';
-import { 
-  Droplets, 
-  AlertTriangle, 
-  ArrowRight, 
-  Info, 
-  ShieldAlert, 
-  Thermometer, 
+import {
+  Droplets,
+  AlertTriangle,
+  Info,
+  ShieldAlert,
+  Thermometer,
   Activity,
   ArrowDownToLine,
   Search
@@ -28,12 +27,54 @@ import { useAppStore } from '../../store';
 import { useReportsStore } from '../../store';
 import { ExportButton } from '../ifms/ExportButton';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+import { getErrorMessage } from '../../lib/utils';
+
+interface TankLossRow {
+  tankId: string;
+  station: string;
+  product: string;
+  expected: number;
+  actual: number;
+  variance: number;
+  variancePct: number;
+}
+
+/** Tank loss row with `id` derived from `tankId` to satisfy the DataTable generic constraint. */
+type TankLossTableRow = TankLossRow & { id: string };
+
+interface ShrinkageTrendPoint {
+  date: string;
+  rate: number;
+}
+
+interface DeliveryReconciliationRow {
+  id: string;
+  date: string;
+  ordered: number;
+  billOfLading: number;
+  received: number;
+  variance: number;
+}
+
+interface StockLossResponse {
+  summary: {
+    netLossLiters: number;
+    valueLoss: number;
+    avgShrinkagePct: number;
+  };
+  shrinkageTrend: ShrinkageTrendPoint[];
+  tankLosses: TankLossRow[];
+  deliveryReconciliation: DeliveryReconciliationRow[];
+}
+
+/** Either a tank loss row clicked from the table, or the "Classify Losses" entry point. */
+type SelectedLoss = Partial<TankLossRow> & { type?: string };
 
 const StockLossReport: React.FC = () => {
   const { addToast } = useAppStore();
   const { fmtCompact } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
-  const [selectedLoss, setSelectedLoss] = useState<any>(null);
+  const [selectedLoss, setSelectedLoss] = useState<SelectedLoss | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const reportActionMutation = useMutation({
     mutationFn: (payload: {
@@ -53,7 +94,7 @@ const StockLossReport: React.FC = () => {
   };
   const stockLossQuery = useQuery({
     queryKey: ['report-stock-loss', filters],
-    queryFn: () => apiReports.stockLoss(filters) as Promise<any>,
+    queryFn: () => apiReports.stockLoss(filters) as Promise<StockLossResponse>,
   });
   const lossRows = stockLossQuery.data?.tankLosses ?? [];
   const trendRows = stockLossQuery.data?.shrinkageTrend ?? [];
@@ -82,8 +123,8 @@ const StockLossReport: React.FC = () => {
                     payload: { stationId: stationId ?? null, productId: productId ?? null },
                   });
                   addToast('Physical audit request submitted for scheduling', 'success');
-                } catch (err: any) {
-                  addToast(err?.apiError?.message ?? err?.message ?? 'Failed to request physical audit', 'error');
+                } catch (err: unknown) {
+                  addToast(getErrorMessage(err, 'Failed to request physical audit'), 'error');
                 }
               }}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-bold shadow-lg shadow-primary/20 hover:opacity-90"
@@ -212,20 +253,20 @@ const StockLossReport: React.FC = () => {
                 </button>
              </div>
              {stockLossQuery.isLoading ? <TableSkeleton /> : (
-               <IFMSDataTable 
+               <IFMSDataTable
                  // Fix: Mapping tankId to id to satisfy generic constraint
-                 data={lossRows.map((item: any) => ({ ...item, id: item.tankId }))}
+                 data={lossRows.map((item): TankLossTableRow => ({ ...item, id: item.tankId }))}
                  columns={[
                    { header: 'Tank', accessorKey: 'tankId' },
                    { header: 'Station', accessorKey: 'station' },
-                   { header: 'Exp. (L)', accessorKey: 'expected', cell: (l: any) => l.expected.toLocaleString() },
-                   { header: 'Act. (L)', accessorKey: 'actual', cell: (l: any) => l.actual.toLocaleString() },
-                   { header: 'Var (L)', accessorKey: 'variance', cell: (l: any) => (
+                   { header: 'Exp. (L)', accessorKey: 'expected', cell: (l: TankLossTableRow) => l.expected.toLocaleString() },
+                   { header: 'Act. (L)', accessorKey: 'actual', cell: (l: TankLossTableRow) => l.actual.toLocaleString() },
+                   { header: 'Var (L)', accessorKey: 'variance', cell: (l: TankLossTableRow) => (
                       <span className={`font-bold ${l.variance < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                         {l.variance > 0 ? '+' : ''}{l.variance}
                       </span>
                    )},
-                   { header: 'Shrink %', accessorKey: 'variancePct', cell: (l: any) => (
+                   { header: 'Shrink %', accessorKey: 'variancePct', cell: (l: TankLossTableRow) => (
                       <span className={`px-2 py-0.5 rounded text-[10px] font-black ${Math.abs(l.variancePct) > 0.5 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
                         {l.variancePct.toFixed(2)}%
                       </span>
@@ -251,7 +292,7 @@ const StockLossReport: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {deliveryRows?.map((d: any, i: number) => (
+                    {deliveryRows?.map((d, i) => (
                       <tr key={i} className="text-xs hover:bg-muted/30 transition-colors">
                         <td className="px-6 py-4">
                            <p className="font-bold">{d.id}</p>
@@ -309,8 +350,8 @@ const StockLossReport: React.FC = () => {
                          });
                          setSelectedCategory(cat.label);
                          addToast(`Loss classified as ${cat.label}`, 'success');
-                       } catch (err: any) {
-                         addToast(err?.apiError?.message ?? err?.message ?? 'Failed to classify loss', 'error');
+                       } catch (err: unknown) {
+                         addToast(getErrorMessage(err, 'Failed to classify loss'), 'error');
                        }
                      }}
                      className="flex items-start gap-4 p-4 border border-border rounded-xl hover:bg-muted/50 transition-all text-left group"
@@ -339,8 +380,8 @@ const StockLossReport: React.FC = () => {
                       payload: { classification: selectedCategory },
                     });
                     addToast('Inventory journals updated from current reconciliation', 'success');
-                  } catch (err: any) {
-                    addToast(err?.apiError?.message ?? err?.message ?? 'Failed to update inventory journals', 'error');
+                  } catch (err: unknown) {
+                    addToast(getErrorMessage(err, 'Failed to update inventory journals'), 'error');
                   }
                 }}
                 className="w-full py-3 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 text-sm"

@@ -84,7 +84,7 @@ export async function apiFetch<T = unknown>(
         body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
         credentials: 'include', // send cookies on same-origin or when API allows CORS credentials
       });
-    } catch (e) {
+    } catch {
       const msg = `Cannot reach API at ${url}. Start the backend (e.g. \`npm run start:dev\` in apps/api) and ensure FRONTEND_ORIGIN includes this site (e.g. http://localhost:5173).`;
       throw Object.assign(new Error(msg), {
         statusCode: 0,

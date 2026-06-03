@@ -4,27 +4,45 @@ import { useQuery } from '@tanstack/react-query';
 import { apiReports } from '../../lib/api/reports';
 import PageHeader from '../ifms/PageHeader';
 import ReportFilters from '../reports/ReportFilters';
-import { IFMSDataTable } from '../ifms/DataTable';
-import DetailsDrawer from '../ifms/DetailsDrawer';
-import { 
+import {
   LineChart, Line, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell
 } from 'recharts';
-import { 
-  Pin, 
-  PinOff, 
-  BarChart3, 
-  ArrowRightLeft, 
-  Trophy, 
-  TrendingUp, 
-  TrendingDown, 
-  ChevronRight,
-  Maximize2,
+import {
+  Pin,
+  PinOff,
+  BarChart3,
+  ArrowRightLeft,
+  TrendingUp,
+  TrendingDown,
   X
 } from 'lucide-react';
 import { TableSkeleton } from '../ifms/Skeletons';
 import { useReportsStore } from '../../store';
 import { ExportButton } from '../ifms/ExportButton';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+
+interface StationTrendPoint {
+  value: number;
+}
+
+interface StationComparisonRow {
+  id: string;
+  name: string;
+  location: string;
+  sales: number;
+  liters: number;
+  grossMargin: number;
+  allocatedOpEx: number;
+  contribution: number;
+  marginPct: number;
+  shrinkagePct: number;
+  varianceCount: number;
+  overdueAR: number;
+  expenseRatio: number;
+  rank: number;
+  percentile: number;
+  trend: StationTrendPoint[];
+}
 
 const StationComparisonReport: React.FC = () => {
   const { fmtCompact, header } = useCurrency();
@@ -44,7 +62,7 @@ const StationComparisonReport: React.FC = () => {
 
   const comparisonQuery = useQuery({ 
     queryKey: ['station-comparison', filters], 
-    queryFn: () => apiReports.stationComparison(filters) as Promise<any[]> 
+    queryFn: () => apiReports.stationComparison(filters) as Promise<StationComparisonRow[]>
   });
 
   useEffect(() => {

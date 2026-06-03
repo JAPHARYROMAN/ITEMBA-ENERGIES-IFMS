@@ -1,34 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import {
-  Bell,
-  Archive,
-  Trash2,
-  Search,
-  Filter,
-  CheckCircle,
-  AlertCircle,
-  Info,
-  XCircle,
-  Eye,
-  EyeOff,
-  Check,
-  MoreVertical,
-  RefreshCw,
-} from 'lucide-react';
+import { Bell, Archive, Search, Check, RefreshCw } from 'lucide-react';
 import {
   useNotifications,
   useUnreadCount,
   useOptimisticMarkRead,
   useOptimisticArchive,
-  Notification,
+  type NotificationFilters,
 } from '@/lib/hooks/notifications';
 import { NotificationItem } from '@/components/ifms/notifications/NotificationItem';
-import { SeverityBadge } from '@/components/ifms/notifications/SeverityBadge';
 import PageHeader from '@/components/ifms/PageHeader';
 import DataTableShell from '@/components/ifms/DataTableShell';
-import { NotificationSkeleton } from '@/components/ifms/Skeletons';
 import { cn } from '@/lib/utils';
 
 type TabType = 'all' | 'unread' | 'archived';
@@ -55,7 +38,10 @@ export default function NotificationsPage({}: NotificationsPageProps) {
   } = useNotifications({
     status: activeTab === 'unread' ? undefined : activeTab === 'archived' ? undefined : undefined,
     unread: activeTab === 'unread' ? true : undefined,
-    severity: severityFilter !== 'all' ? (severityFilter as any) : undefined,
+    severity:
+      severityFilter !== 'all'
+        ? (severityFilter as NotificationFilters['severity'])
+        : undefined,
     type: typeFilter !== 'all' ? typeFilter : undefined,
     page,
     pageSize,
@@ -65,7 +51,10 @@ export default function NotificationsPage({}: NotificationsPageProps) {
   const { markReadOptimistic } = useOptimisticMarkRead();
   const { archiveOptimistic } = useOptimisticArchive();
 
-  const notifications = notificationsData?.deliveries || [];
+  const notifications = useMemo(
+    () => notificationsData?.deliveries || [],
+    [notificationsData],
+  );
   const totalCount = notificationsData?.total || 0;
 
   // Filter notifications based on search and active tab

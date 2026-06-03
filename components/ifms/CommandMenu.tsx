@@ -25,7 +25,7 @@ export const CommandMenu: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [setSearchOpen]);
 
   useEffect(() => {
     if (isSearchOpen) {

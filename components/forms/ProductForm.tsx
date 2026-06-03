@@ -9,6 +9,7 @@ import { setupDataSource } from '../../lib/data-source';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
 import { permissionGroups } from '../../lib/permissions';
+import { getErrorMessage } from '../../lib/utils';
 
 const schema = z.object({
   companyId: z.string().min(1, 'Company is required'),
@@ -64,8 +65,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({ onSuccess, onCancel, i
       addToast(t('forms.saveSuccess', { entity: 'Product' }), 'success');
       onSuccess();
     },
-    onError: (err: any) => {
-      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to create product', 'error');
+    onError: (err: unknown) => {
+      addToast(getErrorMessage(err, 'Failed to create product'), 'error');
     },
   });
 

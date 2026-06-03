@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Bell } from 'lucide-react';
 import { NotificationsDrawer } from './NotificationsDrawer';
 import { useRealtimeNotifications } from '@/lib/hooks/useRealtimeNotifications';
@@ -20,7 +20,7 @@ interface Notification {
     severity: 'info' | 'success' | 'warning' | 'critical';
     title: string;
     body?: string;
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
     actionUrl?: string;
     createdAt: string;
   };

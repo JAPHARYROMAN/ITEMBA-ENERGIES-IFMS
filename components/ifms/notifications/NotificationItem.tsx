@@ -19,7 +19,7 @@ interface Notification {
     severity: 'info' | 'success' | 'warning' | 'critical';
     title: string;
     body?: string;
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
     actionUrl?: string;
     createdAt: string;
   };
@@ -47,8 +47,6 @@ const SEVERITY_STYLES: Record<string, { dot: string; bg: string }> = {
 
 export function NotificationItem({
   notification,
-  isSelected,
-  onSelect,
   onMarkRead,
   onArchive,
   onOpenDetails,

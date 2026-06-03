@@ -50,6 +50,172 @@ interface ShiftDetailResponse {
   }>;
 }
 
+// --- Repository input shapes (UI form data passed into write methods) ---
+// These mirror the form payloads sent by callers. Fields are optional because
+// the form components build them incrementally from optional form state; the
+// repository bodies normalise/default missing values at runtime. The index
+// signature permits extra UI-only fields (e.g. id, source) that callers carry.
+interface ProductInput {
+  companyId?: string;
+  code?: string;
+  name?: string;
+  category?: string;
+  pricePerUnit?: number | string;
+  unit?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+interface TankInput {
+  companyId?: string;
+  branchId?: string;
+  stationId?: string;
+  productId?: string;
+  code?: string;
+  capacity?: number | string;
+  minLevel?: number | string;
+  maxLevel?: number | string;
+  calibrationProfile?: string;
+  [key: string]: unknown;
+}
+
+interface CustomerInput {
+  branchId?: string;
+  code?: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxId?: string;
+  creditLimit?: number | string;
+  paymentTerms?: string;
+  status?: string;
+  isActive?: boolean;
+  [key: string]: unknown;
+}
+
+interface InvoiceItemInput {
+  productId?: string;
+  quantity?: number | string;
+  unitPrice?: number | string;
+  tax?: number | string;
+}
+
+interface InvoiceInput {
+  customerId?: string;
+  date?: string;
+  dueDate?: string;
+  items?: InvoiceItemInput[];
+  [key: string]: unknown;
+}
+
+interface PaymentInput {
+  customerId?: string;
+  amount?: number | string;
+  method?: string;
+  date?: string;
+  referenceNo?: string;
+  allocations?: Array<{ invoiceId?: string; amount?: number }>;
+  [key: string]: unknown;
+}
+
+interface ExpenseInput {
+  branchId?: string;
+  category?: string;
+  amount?: number | string;
+  vendor?: string;
+  paymentMethod?: string;
+  description?: string;
+  billableDepartment?: string;
+  attachmentName?: string;
+  [key: string]: unknown;
+}
+
+interface PettyCashInput {
+  type?: string;
+  amount?: number | string;
+  category?: string;
+  notes?: string;
+  [key: string]: unknown;
+}
+
+interface DeliveryInput {
+  branchId?: string;
+  supplierId?: string;
+  deliveryNote?: string;
+  vehicleNo?: string;
+  driverName?: string;
+  productId?: string;
+  orderedQty?: number | string;
+  expectedDate?: string;
+  [key: string]: unknown;
+}
+
+interface DeliveryReceiveInput {
+  receivedQty?: number | string;
+  density?: number;
+  temperature?: number;
+  allocations?: Array<{ tankId?: string; quantity?: number | string }>;
+  varianceReason?: string;
+  [key: string]: unknown;
+}
+
+interface NozzleInput {
+  stationId?: string;
+  pumpId?: string;
+  tankId?: string;
+  productId?: string;
+  nozzleCode?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+interface ShiftReadingInput {
+  nozzleId?: string;
+  nozzleCode?: string;
+  openingReading?: number | string;
+  closingReading?: number | string;
+  pricePerUnit?: number | string;
+}
+
+interface ShiftOpenInput {
+  branchId?: string;
+  readings?: ShiftReadingInput[];
+  [key: string]: unknown;
+}
+
+interface ShiftCloseInput {
+  id?: string;
+  readings?: ShiftReadingInput[];
+  collections?: { cash?: number | string; card?: number | string; mobileMoney?: number | string; voucher?: number | string };
+  varianceReason?: string;
+  [key: string]: unknown;
+}
+
+interface SaleInput {
+  nozzleId?: string;
+  productId?: string;
+  quantity?: number | string;
+  pricePerUnit?: number | string;
+  discount?: number | string;
+  priceOverrideReason?: string;
+  payment?: { cash?: number | string; card?: number | string; mobile?: number | string; voucher?: number | string };
+  [key: string]: unknown;
+}
+
+interface ApiErrorLike {
+  statusCode?: number;
+  apiError?: {
+    message?: string;
+    approvalRequestId?: string;
+    details?: {
+      message?: { message?: string; approvalRequestId?: string };
+      approvalRequestId?: string;
+    };
+    [key: string]: unknown;
+  };
+}
+
 const uiToApiPaymentMethod: Record<string, string> = {
   'Petty Cash': 'petty_cash',
   'Bank Transfer': 'bank',
@@ -265,7 +431,7 @@ export const productRepo = {
     const rows = await apiSetup.products.list();
     return rows.map(mapApiProduct);
   },
-  create: async (data: any): Promise<Product> => {
+  create: async (data: ProductInput): Promise<Product> => {
     const ctx = await getDefaultContext();
     const created = await apiSetup.products.create({
       companyId: data.companyId ?? ctx.companyId,
@@ -285,7 +451,7 @@ export const tankRepo = {
     const rows = await apiSetup.tanks.list(stationId);
     return rows.map(mapApiTank);
   },
-  create: async (data: any): Promise<Tank> => {
+  create: async (data: TankInput): Promise<Tank> => {
     const created = await apiSetup.tanks.create({
       companyId: data.companyId,
       branchId: data.branchId,
@@ -354,7 +520,7 @@ export const customerRepo = {
       balance: Number(r.balance),
     };
   },
-  create: async (data: any): Promise<Customer> => {
+  create: async (data: CustomerInput): Promise<Customer> => {
     const ctx = await getDefaultContext();
     const branchId = data.branchId ?? ctx.branchId;
     const created = await apiFetch<{
@@ -432,7 +598,7 @@ export const invoiceRepo = {
     const invoices = await invoiceRepo.list(customerId);
     return invoices.filter((i) => i.status !== 'Paid' && i.balanceRemaining > 0);
   },
-  create: async (data: any): Promise<Invoice> => {
+  create: async (data: InvoiceInput): Promise<Invoice> => {
     const created = await apiFetch<{
       id: string;
       invoiceNumber: string;
@@ -500,7 +666,7 @@ export const paymentRepo = {
       allocations: [],
     }));
   },
-  create: async (data: any): Promise<CustomerPayment> => {
+  create: async (data: PaymentInput): Promise<CustomerPayment> => {
     const uiToApiMethod: Record<string, string> = {
       'Cash': 'cash',
       'Bank Transfer': 'bank_transfer',
@@ -601,7 +767,7 @@ export const expenseRepo = {
       };
     });
   },
-  create: async (data: any): Promise<Expense> => {
+  create: async (data: ExpenseInput): Promise<Expense> => {
     const ctx = await getDefaultContext();
     const branchId = data.branchId ?? ctx.branchId;
     const companyId = await resolveCompanyIdFromBranch(branchId);
@@ -641,18 +807,19 @@ export const expenseRepo = {
         method: 'POST',
         body: {},
       });
-    } catch (err: any) {
-      const details = err?.apiError?.details as any;
+    } catch (err) {
+      const apiErr = err as ApiErrorLike;
+      const details = apiErr?.apiError?.details;
       const nested = details?.message;
       const approvalRequestId =
         nested?.approvalRequestId ??
         details?.approvalRequestId ??
-        err?.apiError?.approvalRequestId;
+        apiErr?.apiError?.approvalRequestId;
       if (approvalRequestId) {
         throw Object.assign(new Error(nested?.message ?? 'Governance approval required'), {
-          statusCode: err?.statusCode ?? 409,
+          statusCode: apiErr?.statusCode ?? 409,
           apiError: {
-            ...(err?.apiError ?? {}),
+            ...(apiErr?.apiError ?? {}),
             message: nested?.message ?? 'Governance approval required',
             details: nested,
             approvalRequestId,
@@ -690,7 +857,7 @@ export const expenseRepo = {
       governanceApprovalRequestId,
     };
   },
-  update: async (id: string, data: any): Promise<Expense> => {
+  update: async (id: string, data: ExpenseInput): Promise<Expense> => {
     const ctx = await getDefaultContext();
     const branchId = data.branchId ?? ctx.branchId;
     const companyId = await resolveCompanyIdFromBranch(branchId);
@@ -793,7 +960,7 @@ export const pettyCashRepo = {
       balanceAfter: Number(r.balanceAfter),
     }));
   },
-  transact: async (data: any): Promise<PettyCashTx> => {
+  transact: async (data: PettyCashInput): Promise<PettyCashTx> => {
     const ctx = await getDefaultContext();
     const path = data.type === 'Top-up' ? 'petty-cash/topup' : 'petty-cash/spend';
     const created = await apiFetch<{
@@ -861,7 +1028,7 @@ export const deliveryRepo = {
       timestamp: new Date(r.createdAt).toISOString(),
     }));
   },
-  create: async (data: any): Promise<Delivery> => {
+  create: async (data: DeliveryInput): Promise<Delivery> => {
     const ctx = await getDefaultContext();
     const created = await apiFetch<{
       id: string;
@@ -907,7 +1074,7 @@ export const deliveryRepo = {
       timestamp: new Date(created.createdAt).toISOString(),
     };
   },
-  receive: async (id: string, data: any) => {
+  receive: async (id: string, data: DeliveryReceiveInput) => {
     await apiFetch(`deliveries/${id}/grn`, {
       method: 'POST',
       body: {
@@ -935,7 +1102,7 @@ export const nozzleRepo = {
       status: toUiNozzleStatus(r.status),
     }));
   },
-  create: async (data: any): Promise<Nozzle> => {
+  create: async (data: NozzleInput): Promise<Nozzle> => {
     if (!data.pumpId) throw new Error('Pump is required');
     const created = await apiSetup.nozzles.create({
       stationId: data.stationId,
@@ -979,7 +1146,7 @@ export const shiftRepo = {
       readings: [],
     }));
   },
-  open: async (data: any): Promise<Shift> => {
+  open: async (data: ShiftOpenInput): Promise<Shift> => {
     const created = await apiFetch<{
       id: string;
       stationId: string;
@@ -1014,7 +1181,7 @@ export const shiftRepo = {
       })),
     };
   },
-  close: async (data: any) => {
+  close: async (data: ShiftCloseInput) => {
     await apiFetch(`shifts/${data.id}/close`, {
       method: 'POST',
       body: {
@@ -1089,7 +1256,7 @@ export const saleRepo = {
       paymentType: 'Cash',
     }));
   },
-  create: async (data: any): Promise<Sale & { payment: { cash: number; card: number; mobile: number; voucher: number } }> => {
+  create: async (data: SaleInput): Promise<Sale & { payment: { cash: number; card: number; mobile: number; voucher: number } }> => {
     const ctx = await getDefaultContext();
     if (!data.nozzleId) {
       throw new Error('Nozzle is required for POS sales');

@@ -107,7 +107,18 @@ export const setupDataSource = {
   tanks: {
     list: (stationId?: string): Promise<Tank[]> =>
       apiSetup.tanks.list(stationId).then((rows) => rows.map((row) => mapApiTank(row))),
-    create: async (data: any) => {
+    create: async (data: {
+      companyId?: string;
+      branchId?: string;
+      stationId?: string;
+      productId?: string;
+      code?: string;
+      capacity?: number;
+      minLevel?: number;
+      maxLevel?: number;
+      calibrationProfile?: string;
+      [key: string]: unknown;
+    }) => {
       const r = await apiSetup.tanks.create({
         companyId: data.companyId,
         branchId: data.branchId,

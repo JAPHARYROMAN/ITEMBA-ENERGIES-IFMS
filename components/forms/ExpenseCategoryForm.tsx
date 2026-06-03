@@ -31,8 +31,8 @@ export function ExpenseCategoryForm({ onSuccess, onCancel }: { onSuccess: () => 
       addToast('Category created', 'success');
       onSuccess();
     },
-    onError: (err: any) => {
-      addToast(err?.message ?? 'Failed to create category', 'error');
+    onError: (err: unknown) => {
+      addToast(err instanceof Error ? err.message : 'Failed to create category', 'error');
     },
   });
 
@@ -40,16 +40,19 @@ export function ExpenseCategoryForm({ onSuccess, onCancel }: { onSuccess: () => 
     <form onSubmit={handleSubmit((v) => mutation.mutateAsync(v))} className="space-y-4 p-4">
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Code</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- TextField registers without rules; converting drops the inline `required` validation, changing submit behavior. */}
         <input {...register('code', { required: 'Required' })} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" placeholder="e.g. FUEL" />
         {errors.code && <p className="text-xs text-rose-600">{errors.code.message}</p>}
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Name</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- TextField registers without rules; converting drops the inline `required` validation, changing submit behavior. */}
         <input {...register('name', { required: 'Required' })} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" placeholder="e.g. Fuel Expenses" />
         {errors.name && <p className="text-xs text-rose-600">{errors.name.message}</p>}
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Description (optional)</label>
+        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- TextareaField requires FormProvider context (this form uses bare useForm) and renders its own label, which would duplicate the existing label. */}
         <textarea {...register('description')} rows={3} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
       </div>
       <div className="flex gap-2 pt-2">

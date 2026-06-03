@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { FileText, ChevronDown } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import PageHeader from '../ifms/PageHeader';
 import FilterBar from '../ifms/FilterBar';
 import { IFMSDataTable } from '../ifms/DataTable';

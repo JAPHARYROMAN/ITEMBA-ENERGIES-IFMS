@@ -35,6 +35,11 @@ async function fetchRoles(): Promise<RoleRecord[]> {
   return apiFetch<RoleRecord[]>('auth/roles');
 }
 
+function getErrorMessage(err: unknown, fallback: string): string {
+  const e = err as { apiError?: { message?: string } } | undefined;
+  return e?.apiError?.message ?? fallback;
+}
+
 export default function UsersRolesPage() {
   const { t } = useTranslation();
   const { addToast } = useAppStore();
@@ -60,7 +65,7 @@ export default function UsersRolesPage() {
     queryFn: fetchRoles,
   });
 
-  const users = usersQuery.data ?? [];
+  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
   const roles = rolesQuery.data ?? [];
 
   const filtered = useMemo(() => {
@@ -80,7 +85,7 @@ export default function UsersRolesPage() {
       setShowCreateUser(false);
       setNewUserForm({ name: '', email: '', password: '' });
     },
-    onError: (err: any) => addToast(err?.apiError?.message ?? 'Failed to create user', 'error'),
+    onError: (err: unknown) => addToast(getErrorMessage(err, 'Failed to create user'), 'error'),
   });
 
   const toggleStatusMutation = useMutation({
@@ -93,7 +98,7 @@ export default function UsersRolesPage() {
       addToast(t('users.userUpdated', { defaultValue: 'User status updated' }), 'success');
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
-    onError: (err: any) => addToast(err?.apiError?.message ?? 'Failed to update status', 'error'),
+    onError: (err: unknown) => addToast(getErrorMessage(err, 'Failed to update status'), 'error'),
   });
 
   const assignRoleMutation = useMutation({
@@ -106,7 +111,7 @@ export default function UsersRolesPage() {
       addToast(t('users.role', { defaultValue: 'Role assigned' }), 'success');
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
-    onError: (err: any) => addToast(err?.apiError?.message ?? 'Failed to assign role', 'error'),
+    onError: (err: unknown) => addToast(getErrorMessage(err, 'Failed to assign role'), 'error'),
   });
 
   const removeRoleMutation = useMutation({
@@ -116,7 +121,7 @@ export default function UsersRolesPage() {
       addToast(t('users.userDeleted', { defaultValue: 'Role removed' }), 'success');
       queryClient.invalidateQueries({ queryKey: ['admin-users'] });
     },
-    onError: (err: any) => addToast(err?.apiError?.message ?? 'Failed to remove role', 'error'),
+    onError: (err: unknown) => addToast(getErrorMessage(err, 'Failed to remove role'), 'error'),
   });
 
   return (

@@ -120,7 +120,10 @@ const GovernancePolicyForm: React.FC<{
       queryClient.invalidateQueries({ queryKey: ['governance-policies'] });
       onSuccess();
     },
-    onError: (err: any) => addToast(err?.apiError?.message ?? err?.message ?? 'Failed to save policy', 'error'),
+    onError: (err: unknown) => {
+      const e = err as { apiError?: { message?: string }; message?: string } | undefined;
+      addToast(e?.apiError?.message ?? e?.message ?? 'Failed to save policy', 'error');
+    },
   });
 
   return (
@@ -180,7 +183,6 @@ const GovernancePolicyForm: React.FC<{
 };
 
 const GovernancePoliciesPage: React.FC = () => {
-  const { addToast } = useAppStore();
   const { user } = useAuthStore();
   const [search, setSearch] = React.useState('');
   const [drawerOpen, setDrawerOpen] = React.useState(false);
@@ -238,7 +240,7 @@ const GovernancePoliciesPage: React.FC = () => {
       ) : (
         <IFMSDataTable
           data={filtered}
-          onRowClick={(row: any) => {
+          onRowClick={(row: GovernancePolicy) => {
             setActivePolicy(row);
             setDrawerOpen(true);
           }}
@@ -246,14 +248,14 @@ const GovernancePoliciesPage: React.FC = () => {
             { header: 'Entity', accessorKey: 'entityType' },
             { header: 'Action', accessorKey: 'actionType' },
             { header: 'Company', accessorKey: 'companyId' },
-            { header: 'Branch', accessorKey: 'branchId', cell: (r: any) => r.branchId || 'Global' },
-            { header: 'Threshold Amount', accessorKey: 'thresholdAmount', cell: (r: any) => r.thresholdAmount || '-' },
-            { header: 'Threshold %', accessorKey: 'thresholdPct', cell: (r: any) => r.thresholdPct || '-' },
-            { header: 'Steps', accessorKey: 'steps', cell: (r: any) => r.approvalStepsJson?.length ?? 0 },
+            { header: 'Branch', accessorKey: 'branchId', cell: (r: GovernancePolicy) => r.branchId || 'Global' },
+            { header: 'Threshold Amount', accessorKey: 'thresholdAmount', cell: (r: GovernancePolicy) => r.thresholdAmount || '-' },
+            { header: 'Threshold %', accessorKey: 'thresholdPct', cell: (r: GovernancePolicy) => r.thresholdPct || '-' },
+            { header: 'Steps', accessorKey: 'steps', cell: (r: GovernancePolicy) => r.approvalStepsJson?.length ?? 0 },
             {
               header: 'Enabled',
               accessorKey: 'isEnabled',
-              cell: (r: any) => (
+              cell: (r: GovernancePolicy) => (
                 <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${r.isEnabled ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-700 border-slate-200'}`}>
                   {r.isEnabled ? 'Enabled' : 'Disabled'}
                 </span>

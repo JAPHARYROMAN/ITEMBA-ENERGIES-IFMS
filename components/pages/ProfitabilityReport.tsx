@@ -11,30 +11,85 @@ import DetailsDrawer from '../ifms/DetailsDrawer';
 import { useAppStore } from '../../store';
 import { useReportsStore } from '../../store';
 import { ExportButton } from '../ifms/ExportButton';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  Cell, ComposedChart, Line
+import {
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ComposedChart, Bar, Line
 } from 'recharts';
-import { 
-  TrendingUp, 
-  DollarSign, 
-  Percent, 
-  Target, 
-  Info, 
-  ChevronRight, 
-  ArrowUpRight, 
-  Scale, 
+import {
+  TrendingUp,
+  DollarSign,
+  Percent,
+  Target,
+  Info,
+  ArrowUpRight,
+  Scale,
   FileText,
   PackageCheck
 } from 'lucide-react';
 import { DashboardSkeleton, TableSkeleton } from '../ifms/Skeletons';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+import { getErrorMessage } from '../../lib/utils';
+
+type TrendDirection = 'up' | 'down' | 'neutral';
+
+interface KpiMetric {
+  value: number;
+  change: number;
+  trend: TrendDirection;
+}
+
+interface ProfitabilityMetrics {
+  grossProfit: KpiMetric;
+  netProfit: KpiMetric;
+  marginPerLiter: KpiMetric;
+  opexRatio: KpiMetric;
+}
+
+interface MarginByProductRow {
+  name: string;
+  revenue: number;
+  margin: number;
+  marginPerLiter: number;
+}
+
+interface StationContributionRow {
+  id: string;
+  name: string;
+  location: string;
+  /** Not present in the API payload today; kept optional for the legacy "Revenue" column/drilldown reference. */
+  revenue?: number;
+  sales: number;
+  liters: number;
+  grossMargin: number;
+  allocatedOpEx: number;
+  contribution: number;
+  marginPct: number;
+  shrinkagePct: number;
+  varianceCount: number;
+  overdueAR: number;
+  expenseRatio: number;
+}
+
+interface PriceImpact {
+  before: { revenue: number; margin: number };
+  after: { revenue: number; margin: number };
+  delta: { revenue: number; margin: number };
+}
+
+interface ProfitabilityResponse {
+  metrics: ProfitabilityMetrics;
+  marginByProduct: MarginByProductRow[];
+  stationContribution: StationContributionRow[];
+  priceImpact: PriceImpact;
+}
+
+type StationDrilldown = StationContributionRow & { type: string };
 
 const ProfitabilityReport: React.FC = () => {
   const { addToast } = useAppStore();
   const { fmt, fmtCompact, header, symbol } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
-  const [drilldown, setDrilldown] = useState<any>(null);
+  const [drilldown, setDrilldown] = useState<StationDrilldown | null>(null);
   const reportActionMutation = useMutation({
     mutationFn: () => postReportAction('run-sensitivity-simulation', { payload: { stationId, productId } }),
   });
@@ -46,7 +101,7 @@ const ProfitabilityReport: React.FC = () => {
   };
   const profitabilityQuery = useQuery({
     queryKey: ['profitability-report', filters],
-    queryFn: () => apiReports.profitability(filters) as Promise<any>,
+    queryFn: () => apiReports.profitability(filters) as Promise<ProfitabilityResponse>,
   });
 
   if (profitabilityQuery.isLoading) return <DashboardSkeleton />;
@@ -54,7 +109,6 @@ const ProfitabilityReport: React.FC = () => {
   const kpis = profitabilityQuery.data?.metrics;
   const marginByProduct = profitabilityQuery.data?.marginByProduct ?? [];
   const stationProfit = profitabilityQuery.data?.stationContribution ?? [];
-  const priceData = profitabilityQuery.data?.priceImpact;
 
   const insights = [
     { label: 'Margin Growth', text: 'Avg. Gross Margin per Liter improved 1.2% WoW due to supply optimization.', type: 'positive' },
@@ -77,10 +131,10 @@ const ProfitabilityReport: React.FC = () => {
 
       {/* Primary KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard label="Gross Profit" value={fmtCompact(kpis?.grossProfit.value ?? 0)} delta={kpis?.grossProfit.change} trend={kpis?.grossProfit.trend as any} />
-        <StatCard label="Net Contribution" value={fmtCompact(kpis?.netProfit.value ?? 0)} delta={kpis?.netProfit.change} trend={kpis?.netProfit.trend as any} />
-        <StatCard label="Margin per Liter" value={fmt(kpis?.marginPerLiter.value ?? 0)} delta={kpis?.marginPerLiter.change} trend={kpis?.marginPerLiter.trend as any} />
-        <StatCard label="OpEx Ratio" value={`${kpis?.opexRatio.value.toFixed(1)}%`} delta={kpis?.opexRatio.change} trend={kpis?.opexRatio.trend as any} />
+        <StatCard label="Gross Profit" value={fmtCompact(kpis?.grossProfit.value ?? 0)} delta={kpis?.grossProfit.change} trend={kpis?.grossProfit.trend} />
+        <StatCard label="Net Contribution" value={fmtCompact(kpis?.netProfit.value ?? 0)} delta={kpis?.netProfit.change} trend={kpis?.netProfit.trend} />
+        <StatCard label="Margin per Liter" value={fmt(kpis?.marginPerLiter.value ?? 0)} delta={kpis?.marginPerLiter.change} trend={kpis?.marginPerLiter.trend} />
+        <StatCard label="OpEx Ratio" value={`${kpis?.opexRatio.value.toFixed(1)}%`} delta={kpis?.opexRatio.change} trend={kpis?.opexRatio.trend} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -139,8 +193,8 @@ const ProfitabilityReport: React.FC = () => {
                     try {
                       await reportActionMutation.mutateAsync();
                       addToast('Sensitivity simulation (price/volume) queued', 'info');
-                    } catch (err: any) {
-                      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to run sensitivity simulation', 'error');
+                    } catch (err: unknown) {
+                      addToast(getErrorMessage(err, 'Failed to run sensitivity simulation'), 'error');
                     }
                   }}
                   className="w-full py-2 bg-muted text-foreground text-[10px] font-black uppercase tracking-widest rounded-lg hover:bg-muted/80 transition-colors"
@@ -191,15 +245,15 @@ const ProfitabilityReport: React.FC = () => {
              onRowClick={(row) => setDrilldown({ ...row, type: 'Station Details' })}
              columns={[
                { header: 'Station', accessorKey: 'name' },
-               { header: header('Revenue'), accessorKey: 'revenue', cell: (s: any) => fmtCompact(s.revenue) },
-               { header: header('Gross Margin'), accessorKey: 'grossMargin', cell: (s: any) => fmtCompact(s.grossMargin) },
-               { header: header('Alloc. OpEx'), accessorKey: 'allocatedOpEx', cell: (s: any) => fmtCompact(s.allocatedOpEx) },
-               { header: header('Net Contribution'), accessorKey: 'contribution', cell: (s: any) => (
+               { header: header('Revenue'), accessorKey: 'revenue', cell: (s: StationContributionRow) => fmtCompact(s.revenue ?? NaN) },
+               { header: header('Gross Margin'), accessorKey: 'grossMargin', cell: (s: StationContributionRow) => fmtCompact(s.grossMargin) },
+               { header: header('Alloc. OpEx'), accessorKey: 'allocatedOpEx', cell: (s: StationContributionRow) => fmtCompact(s.allocatedOpEx) },
+               { header: header('Net Contribution'), accessorKey: 'contribution', cell: (s: StationContributionRow) => (
                  <span className={`font-black ${s.contribution < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
                    {fmtCompact(s.contribution)}
                  </span>
                )},
-               { header: 'Margin %', accessorKey: 'marginPct', cell: (s: any) => (
+               { header: 'Margin %', accessorKey: 'marginPct', cell: (s: StationContributionRow) => (
                  <div className="flex items-center gap-2">
                    <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
                      <div className="h-full bg-primary" style={{ width: `${s.marginPct}%` }} />

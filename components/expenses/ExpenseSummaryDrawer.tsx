@@ -17,7 +17,7 @@ export const ExpenseSummaryDrawer: React.FC = () => {
 
   const summary = React.useMemo(() => {
     if (!expenses) return [];
-    const grouped = expenses.reduce((acc: any, curr) => {
+    const grouped = expenses.reduce<Record<string, number>>((acc, curr) => {
       acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
       return acc;
     }, {});

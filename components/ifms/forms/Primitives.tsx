@@ -1,7 +1,7 @@
 
-import React, { useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { matchesPermissionRequirement, useAuthStore } from '../../../store';
-import { Loader2, AlertCircle, CheckCircle2, ShieldOff, TriangleAlert } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, TriangleAlert } from 'lucide-react';
 import { useFormContext } from 'react-hook-form';
 import { useLocation } from 'react-router-dom';
 import type { PermissionMatch } from '../../../types';

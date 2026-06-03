@@ -10,27 +10,65 @@ import DetailsDrawer from '../ifms/DetailsDrawer';
 import { useAppStore } from '../../store';
 import { useReportsStore } from '../../store';
 import { ExportButton } from '../ifms/ExportButton';
-import { 
-  History, 
-  Fuel, 
-  Wallet, 
-  AlertCircle, 
-  CheckCircle2, 
+import {
+  History,
+  Fuel,
+  Wallet,
+  AlertCircle,
+  CheckCircle2,
   Clock,
-  TrendingDown,
-  TrendingUp
+  TrendingDown
 } from 'lucide-react';
 import { TableSkeleton } from '../ifms/Skeletons';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+import { getErrorMessage } from '../../lib/utils';
 
 type TabType = 'shifts' | 'pumps' | 'payments';
 
+interface ShiftRow {
+  id: string;
+  startTime: string;
+  endTime: string | null;
+  status: string;
+  cashierName: string;
+  expectedSales: number;
+  actualSales: number;
+  variance: number;
+  efficiency: number;
+}
+
+interface PumpRow {
+  id: string;
+  nozzle: string;
+  product: string;
+  liters: number;
+  revenue: number;
+  uptime: number;
+  status: string;
+}
+
+interface PaymentEntry {
+  name: string;
+  value: number;
+}
+
+interface DailyOperationsResponse {
+  stats: {
+    avgShiftVariance: number;
+    auditCompliancePct: number;
+    pendingClosures: number;
+  };
+  shifts: ShiftRow[];
+  pumps: PumpRow[];
+  payments: PaymentEntry[];
+}
+
 const DailyOperationsReport: React.FC = () => {
   const { addToast } = useAppStore();
-  const { fmt, fmtCompact, header, symbol } = useCurrency();
+  const { fmt, fmtCompact, header } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
   const [activeTab, setActiveTab] = useState<TabType>('shifts');
-  const [selectedShift, setSelectedShift] = useState<any>(null);
+  const [selectedShift, setSelectedShift] = useState<ShiftRow | null>(null);
   const reportActionMutation = useMutation({
     mutationFn: (payload: { action: 'approve-shift-audit' | 'flag-shift-audit'; targetId?: string }) =>
       postReportAction(payload.action, { targetId: payload.targetId }),
@@ -43,7 +81,7 @@ const DailyOperationsReport: React.FC = () => {
   };
   const dailyQuery = useQuery({
     queryKey: ['report-daily-operations', filters],
-    queryFn: () => apiReports.dailyOperations(filters) as Promise<any>,
+    queryFn: () => apiReports.dailyOperations(filters) as Promise<DailyOperationsResponse>,
   });
   const shifts = dailyQuery.data?.shifts ?? [];
   const pumps = dailyQuery.data?.pumps ?? [];
@@ -119,14 +157,14 @@ const DailyOperationsReport: React.FC = () => {
                 columns={[
                   { header: 'Shift ID', accessorKey: 'id' },
                   { header: 'Cashier', accessorKey: 'cashierName' },
-                  { header: header('Expected'), accessorKey: 'expectedSales', cell: (s: any) => fmt(s.expectedSales) },
-                  { header: header('Actual'), accessorKey: 'actualSales', cell: (s: any) => fmt(s.actualSales) },
-                  { header: header('Variance'), accessorKey: 'variance', cell: (s: any) => (
+                  { header: header('Expected'), accessorKey: 'expectedSales', cell: (s: ShiftRow) => fmt(s.expectedSales) },
+                  { header: header('Actual'), accessorKey: 'actualSales', cell: (s: ShiftRow) => fmt(s.actualSales) },
+                  { header: header('Variance'), accessorKey: 'variance', cell: (s: ShiftRow) => (
                     <span className={s.variance < 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
                       {fmt(s.variance)}
                     </span>
                   )},
-                  { header: 'Efficiency', accessorKey: 'efficiency', cell: (s: any) => (
+                  { header: 'Efficiency', accessorKey: 'efficiency', cell: (s: ShiftRow) => (
                     <div className="flex items-center gap-2">
                       <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
                         <div className="h-full bg-primary" style={{ width: `${s.efficiency}%` }} />
@@ -134,7 +172,7 @@ const DailyOperationsReport: React.FC = () => {
                       <span className="text-xs font-bold">{s.efficiency.toFixed(1)}%</span>
                     </div>
                   )},
-                  { header: 'Status', accessorKey: 'status', cell: (s: any) => (
+                  { header: 'Status', accessorKey: 'status', cell: (s: ShiftRow) => (
                     <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${s.status === 'open' ? 'bg-amber-100 text-amber-700 border border-amber-200' : 'bg-muted text-muted-foreground'}`}>
                       {s.status}
                     </span>
@@ -161,14 +199,14 @@ const DailyOperationsReport: React.FC = () => {
                   { header: 'Pump ID', accessorKey: 'id' },
                   { header: 'Nozzle', accessorKey: 'nozzle' },
                   { header: 'Product', accessorKey: 'product' },
-                  { header: 'Liters Sold', accessorKey: 'liters', cell: (p: any) => p.liters.toLocaleString() },
-                  { header: header('Revenue'), accessorKey: 'revenue', cell: (p: any) => fmtCompact(p.revenue) },
-                  { header: 'Uptime', accessorKey: 'uptime', cell: (p: any) => (
+                  { header: 'Liters Sold', accessorKey: 'liters', cell: (p: PumpRow) => p.liters.toLocaleString() },
+                  { header: header('Revenue'), accessorKey: 'revenue', cell: (p: PumpRow) => fmtCompact(p.revenue) },
+                  { header: 'Uptime', accessorKey: 'uptime', cell: (p: PumpRow) => (
                     <span className={p.uptime < 90 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
                       {p.uptime}%
                     </span>
                   )},
-                  { header: 'Alert Level', accessorKey: 'status', cell: (p: any) => (
+                  { header: 'Alert Level', accessorKey: 'status', cell: (p: PumpRow) => (
                     <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter ${p.uptime < 90 ? 'bg-rose-500 text-white' : 'bg-muted text-muted-foreground'}`}>
                       {p.status}
                     </span>
@@ -184,7 +222,7 @@ const DailyOperationsReport: React.FC = () => {
             <div className="bg-card p-6 rounded-2xl border border-border shadow-sm">
               <h3 className="text-lg font-bold mb-6">Settlement Breakdown</h3>
               <div className="space-y-4">
-                {payments?.map((p: any, i: number) => (
+                {payments?.map((p, i) => (
                   <div key={i} className="flex flex-col gap-2">
                     <div className="flex justify-between items-center text-sm font-bold">
                       <span>{p.name}</span>
@@ -263,8 +301,8 @@ const DailyOperationsReport: React.FC = () => {
                  try {
                    await reportActionMutation.mutateAsync({ action: 'approve-shift-audit', targetId: selectedShift?.id });
                    addToast('Shift audit approved and filed', 'success');
-                 } catch (err: any) {
-                   addToast(err?.apiError?.message ?? err?.message ?? 'Failed to approve shift audit', 'error');
+                 } catch (err: unknown) {
+                   addToast(getErrorMessage(err, 'Failed to approve shift audit'), 'error');
                  }
                }}
                className="flex-1 py-3 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 text-sm"
@@ -277,8 +315,8 @@ const DailyOperationsReport: React.FC = () => {
                  try {
                    await reportActionMutation.mutateAsync({ action: 'flag-shift-audit', targetId: selectedShift?.id });
                    addToast('Shift flagged for supervisor review', 'info');
-                 } catch (err: any) {
-                   addToast(err?.apiError?.message ?? err?.message ?? 'Failed to flag shift', 'error');
+                 } catch (err: unknown) {
+                   addToast(getErrorMessage(err, 'Failed to flag shift'), 'error');
                  }
                }}
                className="px-4 py-3 bg-muted text-muted-foreground font-bold rounded-xl text-sm border border-border"

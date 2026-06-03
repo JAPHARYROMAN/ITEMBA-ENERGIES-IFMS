@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useForm, FormProvider, useWatch } from 'react-hook-form';
+import { useForm, FormProvider, useWatch, type FieldPath } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -19,7 +19,7 @@ import {
 import { hasPermission, useAuthStore, useAppStore } from '../../store';
 import { productRepo, nozzleRepo, saleRepo } from '../../lib/repositories';
 import { useActiveStation } from '../../lib/hooks/useActiveStation';
-import { TextField, NumberField, SelectField, ReadOnlyField } from '../ifms/forms/Fields';
+import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
 import { FormSubmitState } from '../ifms/forms/Primitives';
 import { permissionGroups } from '../../lib/permissions';
 import { MAX_DISCOUNT, QUICK_PAYMENT_PRESETS } from '../../lib/constants';
@@ -56,6 +56,7 @@ const schema = z
   });
 
 type POSFormData = z.infer<typeof schema>;
+type SaleReceipt = Awaited<ReturnType<typeof saleRepo.create>>;
 
 const POSPage: React.FC = () => {
   const { t } = useTranslation();
@@ -63,7 +64,7 @@ const POSPage: React.FC = () => {
   const { addToast } = useAppStore();
   const queryClient = useQueryClient();
   const { fmt, symbol } = useCurrency();
-  const [showReceipt, setShowReceipt] = useState<any>(null);
+  const [showReceipt, setShowReceipt] = useState<SaleReceipt | null>(null);
   const canRunPos = hasPermission(user, permissionGroups.salesPos[0]);
   const canOverridePrice = hasPermission(user, permissionGroups.salesVoid[0]);
 
@@ -239,27 +240,39 @@ const POSPage: React.FC = () => {
                 <Banknote size={14} /> Tender Breakdown
               </h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                {[
-                  {
-                    name: 'payment.cash',
-                    label: 'Cash',
-                    icon: Banknote,
-                    color: 'text-emerald-500',
-                  },
-                  { name: 'payment.card', label: 'Card', icon: CreditCard, color: 'text-blue-500' },
-                  {
-                    name: 'payment.mobile',
-                    label: 'Mobile',
-                    icon: Smartphone,
-                    color: 'text-indigo-500',
-                  },
-                  {
-                    name: 'payment.voucher',
-                    label: 'Voucher',
-                    icon: Ticket,
-                    color: 'text-amber-500',
-                  },
-                ].map((tender) => (
+                {(
+                  [
+                    {
+                      name: 'payment.cash',
+                      label: 'Cash',
+                      icon: Banknote,
+                      color: 'text-emerald-500',
+                    },
+                    {
+                      name: 'payment.card',
+                      label: 'Card',
+                      icon: CreditCard,
+                      color: 'text-blue-500',
+                    },
+                    {
+                      name: 'payment.mobile',
+                      label: 'Mobile',
+                      icon: Smartphone,
+                      color: 'text-indigo-500',
+                    },
+                    {
+                      name: 'payment.voucher',
+                      label: 'Voucher',
+                      icon: Ticket,
+                      color: 'text-amber-500',
+                    },
+                  ] satisfies {
+                    name: FieldPath<POSFormData>;
+                    label: string;
+                    icon: typeof Banknote;
+                    color: string;
+                  }[]
+                ).map((tender) => (
                   <div
                     key={tender.name}
                     className="p-4 bg-muted/20 border border-border rounded-2xl space-y-3"
@@ -268,8 +281,9 @@ const POSPage: React.FC = () => {
                       <tender.icon size={14} className={tender.color} />
                       <span className="text-[10px] font-black uppercase">{tender.label}</span>
                     </div>
+                    {/* eslint-disable-next-line ifms/no-raw-form-inputs -- borderless inline tender cell with custom styling; NumberField wrapper would inject label/border markup and change layout */}
                     <input
-                      {...methods.register(tender.name as any, { valueAsNumber: true })}
+                      {...methods.register(tender.name, { valueAsNumber: true })}
                       type="number"
                       step="0.01"
                       aria-label={`${tender.label} amount`}

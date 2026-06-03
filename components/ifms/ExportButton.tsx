@@ -3,6 +3,7 @@ import { FileDown, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { apiExports, type ExportRecord, type ExportType } from '../../lib/api/exports';
 import { hasPermission, useAppStore, useAuthStore } from '../../store';
 import { EXPORT_POLL_INTERVAL_MS, EXPORT_INITIAL_DELAY_MS } from '../../lib/constants';
+import { getErrorMessage } from '../../lib/utils';
 import { useTranslation } from 'react-i18next';
 
 interface ExportButtonProps {
@@ -81,16 +82,16 @@ export const ExportButton: React.FC<ExportButtonProps> = ({
             return;
           }
           pollTimer.current = window.setTimeout(pollOnce, EXPORT_POLL_INTERVAL_MS);
-        } catch (err: any) {
-          addToast(err?.apiError?.message ?? err?.message ?? t('exportButton.pollFailed'), 'error');
+        } catch (err: unknown) {
+          addToast(getErrorMessage(err, t('exportButton.pollFailed')), 'error');
           setIsSubmitting(false);
           stopPolling();
         }
       };
 
       pollTimer.current = window.setTimeout(pollOnce, EXPORT_INITIAL_DELAY_MS);
-    } catch (err: any) {
-      addToast(err?.apiError?.message ?? err?.message ?? t('exportButton.queueFailed'), 'error');
+    } catch (err: unknown) {
+      addToast(getErrorMessage(err, t('exportButton.queueFailed')), 'error');
       setIsSubmitting(false);
     }
   };

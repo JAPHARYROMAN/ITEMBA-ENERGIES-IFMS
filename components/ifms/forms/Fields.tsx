@@ -1,6 +1,6 @@
 
-import React, { useState, useRef, useEffect, useId } from 'react';
-import { useFormContext, Controller } from 'react-hook-form';
+import React, { useState, useRef, useEffect } from 'react';
+import { useFormContext, type FieldErrors } from 'react-hook-form';
 import { FormGrid } from './Primitives';
 import { ChevronDown, X, Calendar, Paperclip, Search } from 'lucide-react';
 
@@ -22,14 +22,18 @@ const INPUT_CLASS = 'w-full h-10 bg-background border border-input rounded-xl px
 const SELECT_CLASS = `${INPUT_CLASS} appearance-none pr-10`;
 const TEXTAREA_CLASS = 'w-full min-h-24 bg-background border border-input rounded-xl p-4 text-sm font-medium focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all resize-y disabled:opacity-50 disabled:bg-muted/30 no-scrollbar';
 
-function getNestedError(errors: any, name: string): string | undefined {
+function getNestedError(errors: FieldErrors, name: string): string | undefined {
   const parts = name.split('.');
-  let current = errors;
+  let current: unknown = errors;
   for (const part of parts) {
-    if (!current) return undefined;
-    current = current[part];
+    if (!current || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[part];
   }
-  return current?.message as string | undefined;
+  if (current && typeof current === 'object' && 'message' in current) {
+    const message = (current as { message?: unknown }).message;
+    return typeof message === 'string' ? message : undefined;
+  }
+  return undefined;
 }
 
 /* ================================================================

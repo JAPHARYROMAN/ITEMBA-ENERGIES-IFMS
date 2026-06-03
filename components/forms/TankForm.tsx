@@ -8,7 +8,6 @@ import {
   TextField,
   NumberField,
   SelectField,
-  ReadOnlyField,
   TextareaField,
 } from '../ifms/forms/Fields';
 import { setupDataSource } from '../../lib/data-source';

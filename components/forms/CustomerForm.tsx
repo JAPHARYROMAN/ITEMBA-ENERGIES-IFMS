@@ -9,6 +9,7 @@ import { customerRepo } from '../../lib/repositories';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
 import { permissionGroups } from '../../lib/permissions';
+import { getErrorMessage } from '../../lib/utils';
 
 const schema = z.object({
   name: z.string().min(3, 'Name must be at least 3 characters'),
@@ -63,9 +64,8 @@ export const CustomerForm: React.FC<{ onSuccess: () => void; onCancel: () => voi
       addToast(t('forms.saveSuccess', { entity: 'Customer' }), 'success');
       onSuccess();
     },
-    onError: (err: any) => {
-      const msg = err?.apiError?.message ?? err?.message ?? 'Failed to create customer account.';
-      addToast(msg, 'error');
+    onError: (err: unknown) => {
+      addToast(getErrorMessage(err, 'Failed to create customer account.'), 'error');
     },
   });
 

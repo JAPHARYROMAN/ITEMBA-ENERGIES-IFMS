@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useForm, FormProvider } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
+import { NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
 import { pettyCashRepo } from '../../lib/repositories';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
-import { Coins, Wallet, ArrowUpCircle, ArrowDownCircle, Info, Landmark } from 'lucide-react';
+import { Coins, ArrowUpCircle, ArrowDownCircle, Info, Landmark } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
 
 const schema = z.object({
@@ -25,7 +24,6 @@ export const PettyCashForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
   onSuccess,
   onCancel,
 }) => {
-  const { t } = useTranslation();
   const { addToast } = useAppStore();
   const queryClient = useQueryClient();
   const [activeMode, setActiveMode] = useState<'Top-up' | 'Spend'>('Spend');
@@ -48,7 +46,8 @@ export const PettyCashForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
       addToast(`Ledger updated: ${activeMode} recorded`, 'success');
       onSuccess();
     },
-    onError: (err: any) => addToast(err.message, 'error'),
+    onError: (err: unknown) =>
+      addToast(err instanceof Error ? err.message : 'Failed to record transaction', 'error'),
   });
 
   return (

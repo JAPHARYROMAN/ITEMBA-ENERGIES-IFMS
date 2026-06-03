@@ -11,18 +11,16 @@ import DetailsDrawer from '../ifms/DetailsDrawer';
 import { useAppStore } from '../../store';
 import { useReportsStore } from '../../store';
 import { ExportButton } from '../ifms/ExportButton';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  PieChart, Pie, Cell, Legend
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Cell
 } from 'recharts';
-import { 
-  Wallet, 
-  ArrowUpRight, 
-  ArrowDownRight, 
-  Clock, 
-  UserCheck, 
-  Calendar,
-  DollarSign,
+import {
+  Wallet,
+  ArrowUpRight,
+  ArrowDownRight,
+  Clock,
+  UserCheck,
   Briefcase,
   AlertCircle,
   FileText,
@@ -32,12 +30,69 @@ import {
 } from 'lucide-react';
 import { DashboardSkeleton, TableSkeleton } from '../ifms/Skeletons';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+import { getErrorMessage } from '../../lib/utils';
+
+interface AgingBucket {
+  bucket: string;
+  amount: number;
+  color: string;
+  percentage?: number;
+}
+
+interface CashflowSimulation {
+  opening: number;
+  collections: number;
+  payables: number;
+  expenses: number;
+  projected: number;
+  efficiency: number;
+}
+
+interface DebtorInvoice {
+  id: string;
+  invoiceNumber?: string;
+  date: string;
+  amount: number;
+  status: string;
+}
+
+interface DebtorPayment {
+  id: string;
+  date: string;
+  amount: number;
+}
+
+interface Debtor {
+  id: string;
+  name: string;
+  balance: number;
+  limit: number;
+  utilization: number;
+  status: string;
+  lastPaymentAmount: number;
+  lastPayment: string | null;
+  invoices: DebtorInvoice[];
+  payments: DebtorPayment[];
+}
+
+interface CreditCashflowResponse {
+  liquidity: {
+    current: number;
+    totalReceivables: number;
+    totalPayables: number;
+    collectionEfficiencyPct: number;
+  };
+  arAging: AgingBucket[];
+  apAging: AgingBucket[];
+  simulation: CashflowSimulation;
+  topDebtors: Debtor[];
+}
 
 const CreditCashflowReport: React.FC = () => {
   const { addToast } = useAppStore();
-  const { fmt, fmtCompact, header, symbol } = useCurrency();
+  const { fmtCompact, header } = useCurrency();
   const { stationId, productId, dateRange } = useReportsStore();
-  const [selectedDebtor, setSelectedDebtor] = useState<any>(null);
+  const [selectedDebtor, setSelectedDebtor] = useState<Debtor | null>(null);
   const [sortRecentFirst, setSortRecentFirst] = useState(true);
   const bulkReminderMutation = useMutation({
     mutationFn: () => postReportAction('bulk-reminders', { payload: { stationId, productId } }),
@@ -54,17 +109,17 @@ const CreditCashflowReport: React.FC = () => {
   };
   const creditQuery = useQuery({
     queryKey: ['credit-cashflow-report', filters],
-    queryFn: () => apiReports.creditCashflow(filters) as Promise<any>,
+    queryFn: () => apiReports.creditCashflow(filters) as Promise<CreditCashflowResponse>,
   });
   const arAging = creditQuery.data?.arAging ?? [];
   const apAging = creditQuery.data?.apAging ?? [];
   const sim = creditQuery.data?.simulation;
-  const debtors = creditQuery.data?.topDebtors ?? [];
+  const topDebtors = creditQuery.data?.topDebtors;
 
   const sortedDebtors = useMemo(() => {
-    const d = debtors || [];
-    return sortRecentFirst ? [...d] : [...d].sort((a: any, b: any) => (b.balance || 0) - (a.balance || 0));
-  }, [debtors, sortRecentFirst]);
+    const d = topDebtors ?? [];
+    return sortRecentFirst ? [...d] : [...d].sort((a, b) => (b.balance || 0) - (a.balance || 0));
+  }, [topDebtors, sortRecentFirst]);
 
   if (creditQuery.isLoading) return <DashboardSkeleton />;
 
@@ -82,8 +137,8 @@ const CreditCashflowReport: React.FC = () => {
                 try {
                   await bulkReminderMutation.mutateAsync();
                   addToast('Bulk payment reminders queued for delivery', 'success');
-                } catch (err: any) {
-                  addToast(err?.apiError?.message ?? err?.message ?? 'Failed to queue reminders', 'error');
+                } catch (err: unknown) {
+                  addToast(getErrorMessage(err, 'Failed to queue reminders'), 'error');
                 }
               }}
               className="px-4 py-2 bg-secondary text-secondary-foreground border border-border rounded-lg text-sm font-bold hover:opacity-90"
@@ -162,7 +217,7 @@ const CreditCashflowReport: React.FC = () => {
                Payables Aging Profile
              </h3>
              <div className="space-y-6">
-                {apAging?.map((bucket: any, i: number) => (
+                {apAging?.map((bucket, i) => (
                   <div key={i} className="space-y-2">
                     <div className="flex justify-between text-[11px] font-bold">
                        <span className="text-muted-foreground">{bucket.bucket}</span>
@@ -190,7 +245,7 @@ const CreditCashflowReport: React.FC = () => {
                     <p className="text-xs text-muted-foreground font-bold mt-1 uppercase tracking-wider">Bucket distribution of outstanding credit</p>
                  </div>
                  <div className="flex items-center gap-6">
-                    {arAging?.map((b: any, i: number) => (
+                    {arAging?.map((b, i) => (
                       <div key={i} className="flex flex-col items-end">
                          <span className="text-[10px] font-black uppercase text-muted-foreground">{b.bucket}</span>
                          <span className="text-xs font-black" style={{ color: b.color }}>{b.percentage}%</span>
@@ -206,7 +261,7 @@ const CreditCashflowReport: React.FC = () => {
                        <YAxis axisLine={false} tickLine={false} tick={{fill: 'hsl(var(--muted-foreground))', fontSize: 10}} />
                        <Tooltip cursor={{fill: 'hsl(var(--muted))', opacity: 0.4}} contentStyle={{ borderRadius: '12px', border: '1px solid hsl(var(--border))' }} />
                        <Bar dataKey="amount" radius={[6, 6, 0, 0]} barSize={60}>
-                          {arAging?.map((entry: any, index: number) => (
+                          {arAging?.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
                           ))}
                        </Bar>
@@ -233,9 +288,9 @@ const CreditCashflowReport: React.FC = () => {
                    onRowClick={(row) => setSelectedDebtor(row)}
                    columns={[
                      { header: 'Customer', accessorKey: 'name' },
-                     { header: header('Outstanding'), accessorKey: 'balance', cell: (d: any) => fmtCompact(d.balance) },
-                     { header: 'Credit Limit', accessorKey: 'limit', cell: (d: any) => d.limit.toLocaleString() },
-                     { header: 'Utilization', accessorKey: 'utilization', cell: (d: any) => (
+                     { header: header('Outstanding'), accessorKey: 'balance', cell: (d: Debtor) => fmtCompact(d.balance) },
+                     { header: 'Credit Limit', accessorKey: 'limit', cell: (d: Debtor) => d.limit.toLocaleString() },
+                     { header: 'Utilization', accessorKey: 'utilization', cell: (d: Debtor) => (
                         <div className="flex items-center gap-3">
                            <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
                               <div className={`h-full ${Number(d.utilization) > 90 ? 'bg-rose-500' : 'bg-primary'}`} style={{ width: `${d.utilization}%` }} />
@@ -244,7 +299,7 @@ const CreditCashflowReport: React.FC = () => {
                         </div>
                      )},
                      { header: 'Last PMT', accessorKey: 'lastPayment' },
-                     { header: 'Risk Status', accessorKey: 'status', cell: (d: any) => (
+                     { header: 'Risk Status', accessorKey: 'status', cell: (d: Debtor) => (
                         <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter ${d.status === 'At Risk' ? 'bg-rose-500 text-white' : 'bg-emerald-100 text-emerald-700'}`}>
                            {d.status}
                         </span>
@@ -307,7 +362,7 @@ const CreditCashflowReport: React.FC = () => {
               {!selectedDebtor ? <div className="h-40 bg-muted animate-pulse rounded-2xl"></div> : (
                  <div className="space-y-3">
                     <div className="text-[10px] font-black uppercase text-muted-foreground/60 tracking-widest px-1">Open Invoices</div>
-                    {(selectedDebtor?.invoices ?? []).map((inv: any, i: number) => (
+                    {(selectedDebtor?.invoices ?? []).map((inv, i) => (
                        <div key={i} className="flex justify-between items-center p-3 bg-muted/20 border border-border rounded-xl">
                           <div className="flex items-center gap-3">
                              <FileText size={14} className="text-muted-foreground" />
@@ -324,7 +379,7 @@ const CreditCashflowReport: React.FC = () => {
                     ))}
                     <div className="h-px bg-border my-4" />
                     <div className="text-[10px] font-black uppercase text-muted-foreground/60 tracking-widest px-1">Recent Payments</div>
-                    {(selectedDebtor?.payments ?? []).map((pmt: any, i: number) => (
+                    {(selectedDebtor?.payments ?? []).map((pmt, i) => (
                        <div key={i} className="flex justify-between items-center p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">
                           <div className="flex items-center gap-3">
                              <Briefcase size={14} className="text-emerald-600" />
@@ -348,8 +403,8 @@ const CreditCashflowReport: React.FC = () => {
                   try {
                     await customerActionMutation.mutateAsync({ customerId: selectedDebtor.id, action: 'send-payment-link' });
                     addToast('Payment link sent to customer email', 'success');
-                  } catch (err: any) {
-                    addToast(err?.apiError?.message ?? err?.message ?? 'Failed to send payment link', 'error');
+                  } catch (err: unknown) {
+                    addToast(getErrorMessage(err, 'Failed to send payment link'), 'error');
                   }
                 }}
                 className="w-full py-4 bg-primary text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-primary/20 hover:opacity-90 transition-all"
@@ -363,8 +418,8 @@ const CreditCashflowReport: React.FC = () => {
                   try {
                     await customerActionMutation.mutateAsync({ customerId: selectedDebtor.id, action: 'escalate-legal' });
                     addToast('Account flagged for legal collection review', 'info');
-                  } catch (err: any) {
-                    addToast(err?.apiError?.message ?? err?.message ?? 'Failed to flag for legal collection', 'error');
+                  } catch (err: unknown) {
+                    addToast(getErrorMessage(err, 'Failed to flag for legal collection'), 'error');
                   }
                 }}
                 className="w-full py-4 bg-rose-500/10 text-rose-600 font-black uppercase tracking-widest text-xs rounded-2xl hover:bg-rose-500/20 transition-all border border-rose-500/20"

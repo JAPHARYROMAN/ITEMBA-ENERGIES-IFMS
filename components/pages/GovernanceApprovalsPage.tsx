@@ -12,9 +12,14 @@ import {
   type GovernanceApprovalRequest,
   type GovernancePolicyStep,
 } from '../../lib/api/governance';
-import { AlertCircle, CheckCircle2, Clock3, Send } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Send } from 'lucide-react';
 import { ExportButton } from '../ifms/ExportButton';
 import { permissionGroups } from '../../lib/permissions';
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  const e = err as { apiError?: { message?: string }; message?: string } | undefined;
+  return e?.apiError?.message ?? e?.message ?? fallback;
+}
 
 function readPolicySteps(
   metaJson: Record<string, unknown> | null | undefined,
@@ -84,8 +89,8 @@ const GovernanceApprovalsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['governance-approval-detail', selectedId] });
       setDecisionReason('');
     },
-    onError: (err: any) =>
-      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to approve request', 'error'),
+    onError: (err: unknown) =>
+      addToast(getErrorMessage(err, 'Failed to approve request'), 'error'),
   });
 
   const rejectMutation = useMutation({
@@ -96,8 +101,8 @@ const GovernanceApprovalsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['governance-approval-detail', selectedId] });
       setDecisionReason('');
     },
-    onError: (err: any) =>
-      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to reject request', 'error'),
+    onError: (err: unknown) =>
+      addToast(getErrorMessage(err, 'Failed to reject request'), 'error'),
   });
 
   const submitMutation = useMutation({
@@ -110,8 +115,8 @@ const GovernanceApprovalsPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['governance-approvals'] });
       queryClient.invalidateQueries({ queryKey: ['governance-approval-detail', selectedId] });
     },
-    onError: (err: any) =>
-      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to submit request', 'error'),
+    onError: (err: unknown) =>
+      addToast(getErrorMessage(err, 'Failed to submit request'), 'error'),
   });
 
   const filtered = React.useMemo(() => {
@@ -233,12 +238,12 @@ const GovernanceApprovalsPage: React.FC = () => {
       ) : (
         <IFMSDataTable
           data={filtered}
-          onRowClick={(row: any) => setSelectedId(row.id)}
+          onRowClick={(row: GovernanceApprovalRequest) => setSelectedId(row.id)}
           columns={[
             {
               header: 'Status',
               accessorKey: 'status',
-              cell: (r: any) => (
+              cell: (r: GovernanceApprovalRequest) => (
                 <span
                   className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${statusClass(r.status)}`}
                 >
@@ -253,19 +258,19 @@ const GovernanceApprovalsPage: React.FC = () => {
             {
               header: 'Requested At',
               accessorKey: 'requestedAt',
-              cell: (r: any) => new Date(r.requestedAt).toLocaleString(),
+              cell: (r: GovernanceApprovalRequest) => new Date(r.requestedAt).toLocaleString(),
             },
             {
               header: 'Current Step',
               accessorKey: 'currentStep',
-              cell: (r: any) => (
+              cell: (r: GovernanceApprovalRequest) => (
                 <span className="text-xs font-black">{getCurrentStepLabel(r)}</span>
               ),
             },
             {
               header: 'Overdue',
               accessorKey: 'overdue',
-              cell: (r: any) =>
+              cell: (r: GovernanceApprovalRequest) =>
                 isOverdueFromRow(r) ? (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-rose-100 text-rose-700 border border-rose-200">
                     <AlertCircle size={10} /> Overdue

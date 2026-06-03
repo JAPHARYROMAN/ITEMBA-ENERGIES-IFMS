@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 // Fix: Correctly importing NavLink and useLocation from react-router-dom
 import { NavLink, useLocation, Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ChevronDown, Activity, Sparkles, Orbit } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, Sparkles, Orbit } from 'lucide-react';
 import { NAV_ITEMS } from '../constants';
 import { matchesPermissionRequirement, useAppStore, useAuthStore } from '../store';
 import { SidebarItem } from '../types';

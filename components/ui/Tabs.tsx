@@ -13,7 +13,7 @@ export const Tabs: React.FC<TabsProps> = ({ value, onValueChange, children, clas
     <div className={className}>
       {React.Children.map(children, (child) => {
         if (React.isValidElement(child)) {
-          return React.cloneElement(child as React.ReactElement<any>, { activeValue: value, onValueChange });
+          return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, { activeValue: value, onValueChange });
         }
         return child;
       })}
@@ -26,7 +26,7 @@ export const TabsList: React.FC<{ children: React.ReactNode; className?: string;
     <div className={`flex ${className}`}>
       {React.Children.map(children, (child) => {
         if (React.isValidElement(child)) {
-          return React.cloneElement(child as React.ReactElement<any>, { onValueChange });
+          return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, { onValueChange });
         }
         return child;
       })}
