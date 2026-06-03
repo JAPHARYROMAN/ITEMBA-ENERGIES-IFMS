@@ -145,6 +145,11 @@ jobs:
 
       - name: Build web
         run: npm run build
+        env:
+          # Validates the production build compiles; demo mode satisfies the
+          # frontend env schema without a real backend URL. Real deploys set
+          # VITE_API_URL via the build/release environment.
+          VITE_DEMO_MODE: 'true'
 
       - name: Install API deps
         run: npm ci
