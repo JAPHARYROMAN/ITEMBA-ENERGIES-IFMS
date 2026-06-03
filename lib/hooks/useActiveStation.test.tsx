@@ -24,8 +24,8 @@ function makeWrapper() {
 }
 
 const STATIONS = [
-  { id: 's1', name: 'Alpha', companyId: 'c1' },
-  { id: 's2', name: 'Beta', companyId: 'c1' },
+  { id: 's1', name: 'Alpha', companyId: 'c1', location: 'Loc A', manager: 'Mgr A' },
+  { id: 's2', name: 'Beta', companyId: 'c1', location: 'Loc B', manager: 'Mgr B' },
 ];
 
 beforeEach(() => {

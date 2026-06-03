@@ -56,7 +56,9 @@ describe('useCurrency', () => {
   });
 
   test("resolves currency from the active station's company", async () => {
-    stationsList.mockResolvedValue([{ id: 's1', name: 'S1', companyId: 'c2' }]);
+    stationsList.mockResolvedValue([
+      { id: 's1', name: 'S1', companyId: 'c2', location: 'Loc', manager: 'Mgr' },
+    ]);
     companiesList.mockResolvedValue([
       { id: 'c1', name: 'One', code: 'ONE', currency: 'USD', status: 'active' },
       { id: 'c2', name: 'Two', code: 'TWO', currency: 'ZAR', status: 'active' },
