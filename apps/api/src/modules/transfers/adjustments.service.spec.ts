@@ -150,5 +150,92 @@ describe('AdjustmentsService', () => {
         BadRequestException,
       );
     });
+
+    it('passes an absolute amount and trimmed meta to the governance check', async () => {
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', branchId: 'b1', capacity: '1000', currentLevel: '500' }]);
+      mockGovernance.initiateControlledActionRequest.mockResolvedValue({ id: 'gov-req-1' });
+      drizzle.queue([{ id: 'adj-pending', status: 'pending_approval', approvalRequestId: 'gov-req-1' }]);
+
+      await service.create({ ...dto, volumeDelta: -250, reason: '  spillage  ' }, ctx);
+
+      const govArg = mockGovernance.initiateControlledActionRequest.mock.calls[0][0];
+      expect(govArg.amount).toBe(250); // Math.abs of -250
+      expect(govArg.entityType).toBe('stock_adjustment');
+      expect(govArg.meta.notes).toBe('note'); // trimmed
+      expect(govArg.meta.reason).toBe('spillage'); // trimmed
+    });
+
+    it('returns the full completed record and writes a stock-ledger entry on immediate apply', async () => {
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', branchId: 'b1', capacity: '1000', currentLevel: '500' }]);
+      mockGovernance.initiateControlledActionRequest.mockResolvedValue(null);
+      drizzle.db.execute.mockResolvedValueOnce({
+        rows: [{ id: 't1', branchId: 'b1', productId: 'prod1', capacity: '1000', currentLevel: '500' }],
+      });
+      const completed = {
+        id: 'adj-1',
+        companyId: 'c1',
+        branchId: 'b1',
+        tankId: 't1',
+        status: 'completed',
+        volumeDelta: '100.000',
+        reason: 'spillage',
+      };
+      drizzle.queue([completed]); // insert(adjustments).returning
+      drizzle.queue([]); // update(tanks)
+      drizzle.queue([]); // insert(stockLedger).values
+
+      const res = await service.create(dto, ctx);
+      expect(res).toEqual(completed);
+      // both the pending insert path and immediate path go through audit.log
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'create', entity: 'adjustments' }),
+        expect.anything(),
+      );
+    });
+
+    it('re-validates the tank branch inside the locked transaction', async () => {
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', branchId: 'b1', capacity: '1000', currentLevel: '500' }]);
+      mockGovernance.initiateControlledActionRequest.mockResolvedValue(null);
+      // Locked row reports a different branch than the dto -> guard fires.
+      drizzle.db.execute.mockResolvedValueOnce({
+        rows: [{ id: 't1', branchId: 'OTHER', productId: 'prod1', capacity: '1000', currentLevel: '500' }],
+      });
+      await expect(service.create(dto, ctx)).rejects.toThrow(
+        /does not belong to the specified branch/,
+      );
+    });
+
+    it('throws NotFoundException when the tank disappears before the lock', async () => {
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', branchId: 'b1', capacity: '1000', currentLevel: '500' }]);
+      mockGovernance.initiateControlledActionRequest.mockResolvedValue(null);
+      drizzle.db.execute.mockResolvedValueOnce({ rows: [] }); // locked tank gone
+      await expect(service.create(dto, ctx)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('findPage edge', () => {
+    it('defaults total to 0 when count returns nothing', async () => {
+      drizzle.queue([]); // data
+      drizzle.queue([]); // count
+      const res = await service.findPage({});
+      expect(res.total).toBe(0);
+      expect(res.data).toEqual([]);
+    });
+  });
+
+  describe('findById success', () => {
+    it('returns the adjustment row when found', async () => {
+      const row = { id: 'a1', tankId: 't1', status: 'completed' };
+      drizzle.queue([row]);
+      await expect(service.findById('a1')).resolves.toEqual(row);
+    });
   });
 });
