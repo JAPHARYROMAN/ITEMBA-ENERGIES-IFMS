@@ -5,7 +5,7 @@ import { branches } from '../core/branches';
 import { tanks } from '../setup/tanks';
 
 /** Variance classification (demo) */
-export const VARIANCE_CLASSIFICATIONS = ['evaporation', 'leakage', 'calibration', 'theft', 'unknown'] as const;
+export const VARIANCE_CLASSIFICATIONS = ['evaporation', 'leakage', 'calibration', 'theft', 'shrinkage', 'unknown'] as const;
 export type VarianceClassification = (typeof VARIANCE_CLASSIFICATIONS)[number];
 
 export const variances = pgTable(

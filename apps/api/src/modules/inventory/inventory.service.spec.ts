@@ -129,8 +129,65 @@ describe('InventoryService', () => {
           after: expect.objectContaining({ classification: 'theft' }),
         }),
       );
-      // 'shrinkage' is not a stored classification, so the notification branch
-      // is never reached for reconciliation-level variances.
+      // An explicit 'theft' classification overrides the shrinkage auto-class,
+      // so the shrinkage notification branch is not reached.
+      expect(mockNotifications.notifyShrinkageVariance).not.toHaveBeenCalled();
+    });
+
+    it('auto-classifies a significant negative variance as shrinkage and fires the alert', async () => {
+      const dto = { ...baseDto, actualVolume: 100 };
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', currentLevel: '500' }]); // expected 500, actual 100 -> variance -400
+      drizzle.queue([{ id: 'rec1' }]); // reconciliation returning
+      drizzle.queue([{ id: 'var1' }]); // variance returning
+      const res = await service.createReconciliation(dto, ctx);
+      expect(res).toEqual({ id: 'rec1' });
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'variances',
+          action: 'create',
+          after: expect.objectContaining({ classification: 'shrinkage' }),
+        }),
+      );
+      expect(mockNotifications.notifyShrinkageVariance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'var1',
+          companyId: 'c1',
+          branchId: 'b1',
+          thresholdValue: 100,
+          variancePercentage: 80, // 400 / 500 * 100
+        }),
+      );
+    });
+
+    it('does not fire the shrinkage alert for a small negative variance', async () => {
+      const dto = { ...baseDto, actualVolume: 460 };
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', currentLevel: '500' }]); // expected 500, actual 460 -> variance -40
+      drizzle.queue([{ id: 'rec1' }]);
+      drizzle.queue([{ id: 'var1' }]);
+      const res = await service.createReconciliation(dto, ctx);
+      expect(res).toEqual({ id: 'rec1' });
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entity: 'variances',
+          action: 'create',
+          after: expect.objectContaining({ classification: 'unknown' }),
+        }),
+      );
+      expect(mockNotifications.notifyShrinkageVariance).not.toHaveBeenCalled();
+    });
+
+    it('does not fire the shrinkage alert for a positive (surplus) variance', async () => {
+      const dto = { ...baseDto, actualVolume: 1000 };
+      drizzle.queue([{ id: 'b1', stationId: 's1' }]);
+      drizzle.queue([{ id: 's1', companyId: 'c1' }]);
+      drizzle.queue([{ id: 't1', currentLevel: '500' }]); // expected 500, actual 1000 -> variance +500
+      drizzle.queue([{ id: 'rec1' }]);
+      drizzle.queue([{ id: 'var1' }]);
+      await service.createReconciliation(dto, ctx);
       expect(mockNotifications.notifyShrinkageVariance).not.toHaveBeenCalled();
     });
   });
