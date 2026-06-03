@@ -241,9 +241,8 @@ function ResetPasswordPage() {
   const { submitResetPassword, isSubmitting, successMessage, errorMessage } =
     useResetPassword();
   const {
-    register,
     handleSubmit,
-    formState: { errors },
+    control,
   } = useForm<ResetPasswordFormValues>({
     resolver: zodResolver(resetPasswordSchema),
     defaultValues: { newPassword: "", confirmPassword: "" },
@@ -322,22 +321,36 @@ function ResetPasswordPage() {
               className="space-y-4"
               noValidate
             >
-              <PasswordField
-                id="reset-new-password"
-                label="New password"
-                registration={register("newPassword")}
-                placeholder="Enter new password"
-                autoComplete="new-password"
-                error={errors.newPassword?.message}
+              <Controller
+                name="newPassword"
+                control={control}
+                render={({ field, fieldState }) => (
+                  <PasswordField
+                    id="reset-new-password"
+                    label="New password"
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Enter new password"
+                    autoComplete="new-password"
+                    error={fieldState.error?.message}
+                  />
+                )}
               />
 
-              <PasswordField
-                id="reset-confirm-password"
-                label="Confirm password"
-                registration={register("confirmPassword")}
-                placeholder="Re-enter new password"
-                autoComplete="new-password"
-                error={errors.confirmPassword?.message}
+              <Controller
+                name="confirmPassword"
+                control={control}
+                render={({ field, fieldState }) => (
+                  <PasswordField
+                    id="reset-confirm-password"
+                    label="Confirm password"
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Re-enter new password"
+                    autoComplete="new-password"
+                    error={fieldState.error?.message}
+                  />
+                )}
               />
 
               <div className="min-h-[42px]" aria-live="polite">

@@ -6,6 +6,8 @@ describe('canUseViewsForDateRange', () => {
     expect(canUseViewsForDateRange({ dateFrom: '2026-01-01' })).toBe(false);
     expect(canUseViewsForDateRange({ dateTo: '2026-01-31' })).toBe(false);
     expect(canUseViewsForDateRange({})).toBe(false);
+    expect(canUseViewsForDateRange({ dateFrom: '', dateTo: '2026-01-31' })).toBe(false);
+    expect(canUseViewsForDateRange({ dateFrom: '2026-01-01', dateTo: '' })).toBe(false);
   });
 });
 
@@ -74,6 +76,17 @@ describe('ReportsMvService', () => {
       const result = await service.getSalesTrendFromViews(range);
       expect(result).toEqual([{ date: '2026-01-02', amount: 0 }]);
     });
+
+    it('treats empty scope arrays as absent filters', async () => {
+      execute.mockResolvedValue({ rows: [{ date: '2026-01-03', amount: '7' }] });
+      const result = await service.getSalesTrendFromViews({
+        ...range,
+        companyIds: [],
+        branchIds: [],
+      });
+      expect(result).toEqual([{ date: '2026-01-03', amount: 7 }]);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getPaymentMixFromViews', () => {
@@ -93,9 +106,24 @@ describe('ReportsMvService', () => {
       await expect(service.getPaymentMixFromViews(range)).resolves.toBeNull();
     });
 
+    it('returns null when rows is undefined', async () => {
+      execute.mockResolvedValue({});
+      await expect(service.getPaymentMixFromViews(range)).resolves.toBeNull();
+    });
+
     it('swallows DB errors and returns null', async () => {
       execute.mockRejectedValue(new Error('boom'));
       await expect(service.getPaymentMixFromViews(range)).resolves.toBeNull();
+    });
+
+    it('applies single company and branch scope branches', async () => {
+      execute.mockResolvedValue({ rows: [{ method: 'Cash', amount: '5' }] });
+      await service.getPaymentMixFromViews({
+        ...range,
+        companyId: 'company-1',
+        branchId: 'branch-1',
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
     });
 
     it('applies company IN-list and station/branch scope branches', async () => {

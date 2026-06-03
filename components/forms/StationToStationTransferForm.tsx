@@ -38,7 +38,7 @@ export function StationToStationTransferForm({ onSuccess, onCancel }: { onSucces
   });
 
   return (
-    <form onSubmit={handleSubmit((v) => mutation.mutateAsync(v))} className="space-y-4 p-4">
+    <form onSubmit={handleSubmit((v) => mutation.mutate(v))} className="space-y-4 p-4">
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Source Tank (Station A)</label>
         <FieldInput {...register('fromTankId', { required: 'Required' })} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" placeholder="From Tank UUID" />

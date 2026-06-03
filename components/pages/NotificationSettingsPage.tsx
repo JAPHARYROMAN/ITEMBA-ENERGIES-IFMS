@@ -351,11 +351,19 @@ export default function NotificationSettingsPage({}: NotificationSettingsPagePro
                   }
                   className="w-full px-3 py-2 border border-border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option
-                    value={Intl.DateTimeFormat().resolvedOptions().timeZone}
-                  >
-                    {Intl.DateTimeFormat().resolvedOptions().timeZone} (Current)
-                  </option>
+                  {![
+                    'UTC',
+                    'America/New_York',
+                    'America/Chicago',
+                    'America/Denver',
+                    'America/Los_Angeles',
+                  ].includes(Intl.DateTimeFormat().resolvedOptions().timeZone) && (
+                    <option
+                      value={Intl.DateTimeFormat().resolvedOptions().timeZone}
+                    >
+                      {Intl.DateTimeFormat().resolvedOptions().timeZone} (Current)
+                    </option>
+                  )}
                   <option value="UTC">UTC</option>
                   <option value="America/New_York">Eastern Time</option>
                   <option value="America/Chicago">Central Time</option>

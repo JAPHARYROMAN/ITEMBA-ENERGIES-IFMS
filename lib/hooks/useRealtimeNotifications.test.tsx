@@ -110,6 +110,42 @@ describe('useRealtimeNotifications', () => {
     expect(result.current.isConnected).toBe(false);
   });
 
+  test('connect_error falls back when the error has no message', () => {
+    const { result } = renderHook(() => useRealtimeNotifications());
+
+    act(() => fakeSocket.__fire('connect_error', { message: '' }));
+
+    expect(result.current.connectionError).toBe('Connection failed');
+    expect(result.current.isConnected).toBe(false);
+  });
+
+  test('reconnect restores the connected state and clears the previous error', () => {
+    const { result } = renderHook(() => useRealtimeNotifications());
+    act(() => fakeSocket.__fire('connect_error', new Error('temporary failure')));
+    expect(result.current.connectionError).toBe('temporary failure');
+
+    act(() => fakeSocket.__fire('reconnect'));
+
+    expect(result.current.connectionError).toBeNull();
+    expect(result.current.isConnected).toBe(true);
+  });
+
+  test('reconnect_error reports a fixed reconnection failure message', () => {
+    const { result } = renderHook(() => useRealtimeNotifications());
+
+    act(() => fakeSocket.__fire('reconnect_error', new Error('still down')));
+
+    expect(result.current.connectionError).toBe('Reconnection failed');
+  });
+
+  test('socket error falls back when the error has no message', () => {
+    const { result } = renderHook(() => useRealtimeNotifications());
+
+    act(() => fakeSocket.__fire('error', { message: '' }));
+
+    expect(result.current.connectionError).toBe('Socket error');
+  });
+
   test('notification:new prepends a realtime-flagged notification', () => {
     const { result } = renderHook(() => useRealtimeNotifications());
 
@@ -158,6 +194,16 @@ describe('useRealtimeNotifications', () => {
     expect(fakeSocket.connect).toHaveBeenCalledTimes(1);
   });
 
+  test('unmount clears a pending manual reconnect timer', () => {
+    const { unmount } = renderHook(() => useRealtimeNotifications());
+    act(() => fakeSocket.__fire('disconnect', 'io server disconnect'));
+
+    unmount();
+    act(() => vi.advanceTimersByTime(1000));
+
+    expect(fakeSocket.connect).not.toHaveBeenCalled();
+  });
+
   test('client-initiated disconnect does NOT schedule a reconnect', () => {
     renderHook(() => useRealtimeNotifications());
     act(() => fakeSocket.__fire('connect'));
@@ -173,6 +219,15 @@ describe('useRealtimeNotifications', () => {
 
     expect(fakeSocket.off).toHaveBeenCalled();
     expect(fakeSocket.disconnect).toHaveBeenCalled();
+  });
+
+  test('unread count events are accepted without changing realtime notifications', () => {
+    const { result } = renderHook(() => useRealtimeNotifications());
+
+    act(() => fakeSocket.__fire('notification:unreadCount', { count: 9 }));
+
+    expect(result.current.realtimeNotifications).toEqual([]);
+    expect(result.current.isConnected).toBe(false);
   });
 
   test('an ifms:auth-logout window event disconnects and clears notifications', () => {
@@ -191,5 +246,27 @@ describe('useRealtimeNotifications', () => {
     expect(fakeSocket.disconnect).toHaveBeenCalled();
     expect(result.current.isConnected).toBe(false);
     expect(result.current.realtimeNotifications).toHaveLength(0);
+  });
+
+  test('auth logout is harmless when no socket was opened', () => {
+    getAccessTokenMock.mockReturnValue(null);
+    const { result } = renderHook(() => useRealtimeNotifications());
+
+    act(() => window.dispatchEvent(new Event('ifms:auth-logout')));
+
+    expect(result.current.socket).toBeNull();
+    expect(result.current.realtimeNotifications).toEqual([]);
+    expect(fakeSocket.disconnect).not.toHaveBeenCalled();
+  });
+
+  test('initialization failures are reported when socket creation throws', () => {
+    ioMock.mockImplementationOnce(() => {
+      throw new Error('constructor failed');
+    });
+
+    const { result } = renderHook(() => useRealtimeNotifications());
+
+    expect(result.current.connectionError).toBe('Failed to initialize connection');
+    expect(result.current.socket).toBeNull();
   });
 });

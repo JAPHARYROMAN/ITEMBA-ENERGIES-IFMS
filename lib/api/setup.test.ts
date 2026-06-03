@@ -47,6 +47,14 @@ describe('apiSetup list helpers (listAll pagination)', () => {
     expect(apiFetchMock.mock.calls[0][0]).toBe('branches?page=1&pageSize=100&stationId=station-9');
   });
 
+  test('listAll ignores empty filters and caps invalid page sizes through tank listing', async () => {
+    apiFetchMock.mockResolvedValue(onePage([]) as never);
+
+    await apiSetup.tanks.list('');
+
+    expect(apiFetchMock.mock.calls[0][0]).toBe('tanks?page=1&pageSize=100');
+  });
+
   test('tanks.list coerces numeric string fields to numbers', async () => {
     apiFetchMock.mockResolvedValue(
       onePage([
@@ -100,6 +108,54 @@ describe('apiSetup create/update/delete request shapes', () => {
     });
   });
 
+  test('stations.update and delete target stations/:id', async () => {
+    apiFetchMock.mockResolvedValue({} as never);
+    await apiSetup.stations.update('s1', { manager: 'Jane', status: 'inactive' });
+    expect(apiFetchMock).toHaveBeenCalledWith('stations/s1', {
+      method: 'PATCH',
+      body: { manager: 'Jane', status: 'inactive' },
+    });
+
+    apiFetchMock.mockResolvedValue(undefined as never);
+    await apiSetup.stations.delete('s1');
+    expect(apiFetchMock).toHaveBeenCalledWith('stations/s1', { method: 'DELETE' });
+  });
+
+  test('branches create/update/delete delegate with expected payloads', async () => {
+    apiFetchMock.mockResolvedValue({} as never);
+    await apiSetup.branches.create({ stationId: 's1', code: 'B1', name: 'Branch' });
+    expect(apiFetchMock).toHaveBeenCalledWith('branches', {
+      method: 'POST',
+      body: { stationId: 's1', code: 'B1', name: 'Branch' },
+    });
+
+    await apiSetup.branches.update('b1', { name: 'Updated' });
+    expect(apiFetchMock).toHaveBeenCalledWith('branches/b1', {
+      method: 'PATCH',
+      body: { name: 'Updated' },
+    });
+
+    await apiSetup.branches.delete('b1');
+    expect(apiFetchMock).toHaveBeenCalledWith('branches/b1', { method: 'DELETE' });
+  });
+
+  test('products create/delete delegate with expected payloads', async () => {
+    apiFetchMock.mockResolvedValue({} as never);
+    const product = {
+      companyId: 'c1',
+      code: 'PMS',
+      name: 'Petrol',
+      category: 'Fuel',
+      pricePerUnit: 180,
+    };
+
+    await apiSetup.products.create(product);
+    expect(apiFetchMock).toHaveBeenCalledWith('products', { method: 'POST', body: product });
+
+    await apiSetup.products.delete('p1');
+    expect(apiFetchMock).toHaveBeenCalledWith('products/p1', { method: 'DELETE' });
+  });
+
   test('tanks.create POSTs to tanks', async () => {
     apiFetchMock.mockResolvedValue({} as never);
     await apiSetup.tanks.create({ companyId: 'c1', branchId: 'b1', code: 'TK', capacity: 1000 });
@@ -107,6 +163,30 @@ describe('apiSetup create/update/delete request shapes', () => {
       method: 'POST',
       body: { companyId: 'c1', branchId: 'b1', code: 'TK', capacity: 1000 },
     });
+  });
+
+  test('tanks.delete DELETEs tanks/:id', async () => {
+    apiFetchMock.mockResolvedValue(undefined as never);
+    await apiSetup.tanks.delete('t1');
+    expect(apiFetchMock).toHaveBeenCalledWith('tanks/t1', { method: 'DELETE' });
+  });
+
+  test('nozzles.list applies station filter and create POSTs to nozzles', async () => {
+    apiFetchMock.mockResolvedValue(onePage([]) as never);
+    await apiSetup.nozzles.list('s1');
+    expect(apiFetchMock).toHaveBeenCalledWith('nozzles?page=1&pageSize=100&stationId=s1');
+
+    apiFetchMock.mockResolvedValue({} as never);
+    const nozzle = {
+      stationId: 's1',
+      pumpId: 'pump-1',
+      tankId: 'tank-1',
+      productId: 'product-1',
+      code: 'N1',
+      status: 'active',
+    };
+    await apiSetup.nozzles.create(nozzle);
+    expect(apiFetchMock).toHaveBeenCalledWith('nozzles', { method: 'POST', body: nozzle });
   });
 
   test('nozzles.delete DELETEs nozzles/:id', async () => {

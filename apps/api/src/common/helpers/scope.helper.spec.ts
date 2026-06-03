@@ -1,4 +1,11 @@
-import { extractTenantScope, mergeTenantScope } from './scope.helper';
+import {
+  extractTenantScope,
+  hasBranchAccess,
+  hasCompanyAccess,
+  hasTenantScope,
+  isTenantScopedUuid,
+  mergeTenantScope,
+} from './scope.helper';
 
 describe('scope helper', () => {
   const companyA = '11111111-1111-1111-1111-111111111111';
@@ -29,5 +36,14 @@ describe('scope helper', () => {
 
     expect(scope.companyIds).toEqual([companyA, companyB]);
     expect(scope.branchIds).toEqual([branchA]);
+  });
+
+  it('checks tenant scope presence, UUID shape, and direct access permissions', () => {
+    expect(hasTenantScope({ companyIds: [], branchIds: [] })).toBe(false);
+    expect(hasTenantScope({ companyIds: [], branchIds: [branchA] })).toBe(true);
+    expect(isTenantScopedUuid(companyA)).toBe(true);
+    expect(isTenantScopedUuid('not-a-uuid')).toBe(false);
+    expect(hasCompanyAccess([`company:${companyA}`], companyA)).toBe(true);
+    expect(hasBranchAccess([`branch:${branchA}`], branchA)).toBe(true);
   });
 });
