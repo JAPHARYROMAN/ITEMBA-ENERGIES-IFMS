@@ -97,6 +97,9 @@ interface AuditContext {
 export class InventoryService {
   private readonly logger = new Logger(InventoryService.name);
 
+  /** Absolute volume (litres) at/below which a negative variance is treated as shrinkage. */
+  private static readonly SHRINKAGE_THRESHOLD_LITRES = 100;
+
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<Schema>,
     private readonly audit: AuditService,
@@ -232,9 +235,14 @@ export class InventoryService {
     const expectedVolume = branchTanks.reduce((sum, t) => sum + Number(t.currentLevel || 0), 0);
     const actualVolume = Number(dto.actualVolume);
     const variance = Math.round((actualVolume - expectedVolume) * 1000) / 1000;
+    // Auto-classify significant negative variances (actual << expected) as
+    // stock loss / shrinkage so the shrinkage-alert branch below can fire.
+    const autoClassification = variance === 0
+      ? null
+      : (variance <= -InventoryService.SHRINKAGE_THRESHOLD_LITRES ? 'shrinkage' : 'unknown');
     const classification = dto.varianceClassification && VARIANCE_CLASSIFICATIONS.includes(dto.varianceClassification as any)
       ? dto.varianceClassification
-      : (variance !== 0 ? 'unknown' : null);
+      : autoClassification;
 
     const [inserted] = await this.db
       .insert(reconciliations)
@@ -305,14 +313,14 @@ export class InventoryService {
 
         // Send notification for critical shrinkage variance
         try {
-          if (classification === 'shrinkage' && Math.abs(variance) > 100) { // Threshold: 100L variance
+          if (classification === 'shrinkage' && Math.abs(variance) >= InventoryService.SHRINKAGE_THRESHOLD_LITRES) {
             await this.notificationTriggers.notifyShrinkageVariance({
               id: varRow.id,
               companyId: station.companyId,
               branchId: dto.branchId,
               productId: '',
-              variancePercentage: Math.abs((variance / expectedVolume) * 100),
-              thresholdValue: 100,
+              variancePercentage: expectedVolume !== 0 ? Math.abs((variance / expectedVolume) * 100) : 0,
+              thresholdValue: InventoryService.SHRINKAGE_THRESHOLD_LITRES,
               productName: 'Station Reconciliation',
             });
           }

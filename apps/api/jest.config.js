@@ -16,15 +16,16 @@ module.exports = {
   // Coverage ratchet: thresholds are pinned just below the CURRENT measured
   // coverage so CI cannot regress. Raise these incrementally as real test
   // coverage improves — never lower them. Measured at the last ratchet:
-  // statements 33.74, branches 24.22, lines 34.75, functions 28.65
-  // (setup/core/transfers/inventory services + controllers now covered).
+  // statements 43.50, branches 31.57, lines 44.61, functions 38.40
+  // (payables/credit/sales/deliveries/expenses controllers + payables &
+  // credit aging/statement services + suppliers & expenses read paths covered).
   // See follow-up task to grow coverage back toward 50%.
   coverageThreshold: {
     global: {
-      branches: 22,
-      functions: 26,
-      lines: 32,
-      statements: 31,
+      branches: 29,
+      functions: 36,
+      lines: 42,
+      statements: 41,
     },
   },
 };
