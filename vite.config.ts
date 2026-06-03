@@ -31,13 +31,14 @@ export default defineConfig(({ mode }) => {
         reporter: ['text-summary', 'text'],
         // Coverage ratchet (same policy as the API jest gate): pinned just below
         // the current measured floor so CI cannot regress. Raise as the large
-        // untested surface (page components) gets covered — never lower.
-        // Measured: statements 24.65, branches 19.47, functions 21.36, lines 24.68.
+        // untested surface (page components) gets covered; never lower.
+        // Measured with 621 tests: statements 90.80, branches 81.77,
+        // functions 88.31, lines 91.59.
         thresholds: {
-          statements: 23,
-          branches: 18,
-          functions: 20,
-          lines: 23,
+          statements: 89,
+          branches: 80,
+          functions: 87,
+          lines: 90,
         },
       },
     },

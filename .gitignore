@@ -43,3 +43,6 @@ apps/api/storage/
 *.njsproj
 *.sln
 *.sw?
+
+# tsc temp output
+.tmp-tsc/

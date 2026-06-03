@@ -6,8 +6,11 @@ import {
   useNotifications,
   useUnreadCount,
   useNotificationPreferences,
+  useMarkSeen,
   useMarkRead,
+  useArchive,
   useMarkAllRead,
+  useOptimisticMarkRead,
   useOptimisticArchive,
   type NotificationListResponse,
   type NotificationPreferences,
@@ -72,6 +75,19 @@ describe('useNotifications', () => {
     expect(url).toContain('status=sent');
     expect(url).not.toContain('type=');
   });
+
+  test('omits null filter values while preserving false booleans', async () => {
+    getMock.mockResolvedValue({ deliveries: [], total: 0 });
+    const { result } = renderHook(
+      () => useNotifications({ unread: false, dateFrom: null } as Parameters<typeof useNotifications>[0]),
+      { wrapper: makeWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const url = getMock.mock.calls[0][0] as string;
+    expect(url).toContain('unread=false');
+    expect(url).not.toContain('dateFrom=');
+  });
 });
 
 describe('useUnreadCount', () => {
@@ -116,6 +132,16 @@ describe('useNotificationPreferences', () => {
 });
 
 describe('mutation hooks invalidate notification queries', () => {
+  test('useMarkSeen posts to the seen endpoint', async () => {
+    postMock.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useMarkSeen(), { wrapper: makeWrapper() });
+
+    act(() => result.current.mutate('d-seen'));
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postMock).toHaveBeenCalledWith('/notifications/d-seen/seen');
+  });
+
   test('useMarkRead posts to the read endpoint and invalidates on success', async () => {
     postMock.mockResolvedValue(undefined);
     const wrapper = makeWrapper();
@@ -129,6 +155,19 @@ describe('mutation hooks invalidate notification queries', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['notifications'] });
   });
 
+  test('useArchive posts to the archive endpoint and invalidates unread count', async () => {
+    postMock.mockResolvedValue(undefined);
+    const wrapper = makeWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useArchive(), { wrapper });
+    act(() => result.current.mutate('d-archive'));
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postMock).toHaveBeenCalledWith('/notifications/d-archive/archive');
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['notifications', 'unread-count'] });
+  });
+
   test('useMarkAllRead posts to the bulk endpoint', async () => {
     postMock.mockResolvedValue(undefined);
     const { result } = renderHook(() => useMarkAllRead(), { wrapper: makeWrapper() });
@@ -136,6 +175,47 @@ describe('mutation hooks invalidate notification queries', () => {
     act(() => result.current.mutate());
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(postMock).toHaveBeenCalledWith('/notifications/mark-all-read');
+  });
+});
+
+describe('useOptimisticMarkRead', () => {
+  test('marks the matching delivery as read and leaves other deliveries unchanged', async () => {
+    postMock.mockResolvedValue(undefined);
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useOptimisticMarkRead(), { wrapper });
+
+    const seed: NotificationListResponse = {
+      total: 2,
+      deliveries: [
+        { id: 'd1' } as NotificationListResponse['deliveries'][number],
+        { id: 'd2', readAt: 'already-read' } as NotificationListResponse['deliveries'][number],
+      ],
+    };
+    act(() => {
+      queryClient.setQueryData(['notifications'], seed);
+    });
+
+    act(() => result.current.markReadOptimistic('d1'));
+
+    const after = queryClient.getQueryData<NotificationListResponse>(['notifications']);
+    expect(after?.deliveries[0].readAt).toEqual(expect.any(String));
+    expect(after?.deliveries[1].readAt).toBe('already-read');
+
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/notifications/d1/read'));
+  });
+
+  test('keeps an empty cache entry unchanged', async () => {
+    postMock.mockResolvedValue(undefined);
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useOptimisticMarkRead(), { wrapper });
+    act(() => {
+      queryClient.setQueryData(['notifications'], { total: 0 } as NotificationListResponse);
+    });
+
+    act(() => result.current.markReadOptimistic('missing'));
+
+    expect(queryClient.getQueryData(['notifications'])).toEqual({ total: 0 });
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/notifications/missing/read'));
   });
 });
 
@@ -163,5 +243,19 @@ describe('useOptimisticArchive', () => {
     expect(after?.deliveries.map((d) => d.id)).toEqual(['d2']);
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/notifications/d1/archive'));
+  });
+
+  test('leaves an empty cache entry unchanged', async () => {
+    postMock.mockResolvedValue(undefined);
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useOptimisticArchive(), { wrapper });
+    act(() => {
+      queryClient.setQueryData(['notifications'], { total: 0 } as NotificationListResponse);
+    });
+
+    act(() => result.current.archiveOptimistic('missing'));
+
+    expect(queryClient.getQueryData(['notifications'])).toEqual({ total: 0 });
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/notifications/missing/archive'));
   });
 });

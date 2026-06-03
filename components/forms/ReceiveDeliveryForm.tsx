@@ -13,12 +13,21 @@ import { useActiveStation } from '../../lib/hooks/useActiveStation';
 import { Layers, CheckCircle2, AlertTriangle, Info, Scale } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
 
+const blankNumberToUndefined = (value: unknown) =>
+  value === '' || (typeof value === 'number' && Number.isNaN(value)) ? undefined : value;
+
 const schema = z
   .object({
     id: z.string(),
     receivedQty: z.coerce.number().min(1, 'Received quantity required'),
-    density: z.coerce.number().min(0).max(1000).optional(),
-    temperature: z.coerce.number().min(-50).max(100).optional(),
+    density: z.preprocess(
+      blankNumberToUndefined,
+      z.coerce.number().min(0).max(1000).optional(),
+    ),
+    temperature: z.preprocess(
+      blankNumberToUndefined,
+      z.coerce.number().min(-50).max(100).optional(),
+    ),
     allocations: z
       .array(
         z.object({
@@ -61,7 +70,10 @@ export const ReceiveDeliveryForm: React.FC<{
     enabled: !!stationId,
   });
 
-  const productTanks = tanks?.filter((t) => t.productId === delivery?.productId) || [];
+  const productTanks = useMemo(
+    () => tanks?.filter((t) => t.productId === delivery?.productId) || [],
+    [tanks, delivery?.productId],
+  );
 
   const methods = useForm<ReceiveDeliveryFormData>({
     resolver: zodResolver(schema),

@@ -72,7 +72,7 @@ export const GeneralSetupForm: React.FC<{
   const mutation = useMutation({
     mutationFn: async (data: FormData) => {
       if (isStationEntity) {
-        const companyId = data.companyId ?? companies[0]?.id;
+        const companyId = data.companyId || companies[0]?.id;
         if (!companyId) throw new Error('Select a company before creating a station.');
         if (isEditing) {
           return setupDataSource.stations.update(initialData.id, {
@@ -91,7 +91,7 @@ export const GeneralSetupForm: React.FC<{
       }
 
       if (isBranchEntity) {
-        const stationId = data.stationId ?? stations[0]?.id;
+        const stationId = data.stationId || stations[0]?.id;
         if (!stationId) throw new Error('Select a station before creating a branch.');
         if (isEditing) {
           return setupDataSource.branches.update(initialData.id, {
@@ -144,9 +144,7 @@ export const GeneralSetupForm: React.FC<{
     },
   });
 
-  const onSubmit = async (data: FormData) => {
-    await mutation.mutateAsync(data);
-  };
+  const onSubmit = (data: FormData) => mutation.mutate(data);
 
   return (
     <FormProvider {...methods}>

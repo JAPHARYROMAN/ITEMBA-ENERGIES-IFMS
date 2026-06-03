@@ -47,6 +47,14 @@ import {
   shiftRepo,
   saleRepo,
   dipRepo,
+  reconciliationRepo,
+  varianceRepo,
+  transferRepo,
+  adjustmentRepo,
+  supplierInvoiceRepo,
+  payablesAgingRepo,
+  creditAgingRepo,
+  expenseCategoryRepo,
 } from './repositories';
 
 const mockApiFetch = apiFetch as unknown as ReturnType<typeof vi.fn>;
@@ -460,5 +468,305 @@ describe('dipRepo.list', () => {
     ], 1));
     const rows = await dipRepo.list();
     expect(rows[0]).toEqual({ id: 'dip1', tankId: 't1', dipDate: '2026-01-01', volume: 900, waterLevel: null, temperature: 20 });
+  });
+});
+
+describe('deliveryRepo write paths', () => {
+  test('create uses default branch, drops blank optional ids, and maps cancelled status', async () => {
+    wireDefaultContext();
+    mockApiFetch.mockResolvedValueOnce({
+      id: 'd9',
+      supplierId: null,
+      deliveryNote: 'DN-9',
+      vehicleNo: null,
+      driverName: null,
+      productId: null,
+      orderedQty: '750',
+      expectedDate: '2026-02-01T00:00:00.000Z',
+      receivedQty: '700',
+      density: '0.82',
+      temperature: null,
+      status: 'cancelled',
+      createdAt: '2026-01-28T12:00:00.000Z',
+    });
+
+    const created = await deliveryRepo.create({
+      supplierId: '',
+      productId: '',
+      deliveryNote: 'DN-9',
+      orderedQty: '750',
+      expectedDate: '2026-02-01',
+    });
+
+    const body = (mockApiFetch.mock.calls[mockApiFetch.mock.calls.length - 1][1] as { body: Record<string, unknown> }).body;
+    expect(body).toMatchObject({ branchId: 'b1', supplierId: undefined, productId: undefined, orderedQty: 750 });
+    expect(created).toMatchObject({ status: 'Cancelled', receivedQty: 700, density: 0.82, temperature: undefined });
+  });
+
+  test('receive coerces GRN allocation quantities', async () => {
+    mockApiFetch.mockResolvedValueOnce(undefined);
+
+    await expect(deliveryRepo.receive('d1', {
+      receivedQty: '1000',
+      density: 0.84,
+      temperature: 24,
+      allocations: [{ tankId: 't1', quantity: '600' }, { tankId: 't2', quantity: 400 }],
+      varianceReason: 'split load',
+    })).resolves.toEqual({ success: true });
+
+    expect(mockApiFetch).toHaveBeenCalledWith('deliveries/d1/grn', {
+      method: 'POST',
+      body: {
+        receivedQty: 1000,
+        density: 0.84,
+        temperature: 24,
+        allocations: [{ tankId: 't1', quantity: 600 }, { tankId: 't2', quantity: 400 }],
+        varianceReason: 'split load',
+      },
+    });
+  });
+});
+
+describe('nozzleRepo create variants', () => {
+  test('create maps inactive UI status to API status', async () => {
+    mockSetup.nozzles.create.mockResolvedValue({
+      id: 'n-inactive',
+      stationId: 's1',
+      pumpCode: 'P1',
+      nozzleCode: 'N9',
+      productId: 'p1',
+      tankId: 't1',
+      status: 'inactive',
+    });
+
+    const created = await nozzleRepo.create({
+      stationId: 's1',
+      pumpId: 'pump-1',
+      tankId: 't1',
+      productId: 'p1',
+      nozzleCode: 'N9',
+      status: 'Inactive',
+    });
+
+    expect(mockSetup.nozzles.create).toHaveBeenCalledWith(expect.objectContaining({ status: 'inactive' }));
+    expect(created.status).toBe('Inactive');
+  });
+});
+
+describe('shiftRepo branch variants', () => {
+  test('list maps closed and unknown statuses plus present endTime', async () => {
+    mockApiFetch.mockResolvedValueOnce(page([
+      { id: 'sh-closed', stationId: 's1', startTime: '2026-01-01T08:00:00.000Z', endTime: '2026-01-01T16:00:00.000Z', status: 'closed', openedBy: 'u1' },
+      { id: 'sh-draft', stationId: 's1', startTime: '2026-01-02T08:00:00.000Z', endTime: null, status: 'paused', openedBy: null },
+    ], 2));
+
+    const rows = await shiftRepo.list();
+
+    expect(rows[0]).toMatchObject({ status: 'closed', endTime: '2026-01-01T16:00:00.000Z', cashierId: 'u1' });
+    expect(rows[1]).toMatchObject({ status: 'draft', endTime: undefined, cashierId: '' });
+  });
+
+  test('open maps reading defaults and created endTime', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      id: 'sh-open',
+      stationId: 's1',
+      startTime: '2026-01-01T08:00:00.000Z',
+      endTime: '2026-01-01T09:00:00.000Z',
+      status: 'open',
+      openedBy: null,
+    });
+
+    const opened = await shiftRepo.open({
+      branchId: 'b1',
+      readings: [{ nozzleId: 'n1', openingReading: '123', pricePerUnit: '2.5' }],
+    });
+
+    expect(mockApiFetch).toHaveBeenCalledWith('shifts/open', expect.objectContaining({
+      body: {
+        branchId: 'b1',
+        openingMeterReadings: [{ nozzleId: 'n1', value: 123, pricePerUnit: 2.5 }],
+      },
+    }));
+    expect(opened).toMatchObject({
+      endTime: '2026-01-01T09:00:00.000Z',
+      cashierId: '',
+      readings: [{ nozzleId: 'n1', nozzleCode: 'n1', openingReading: 123, pricePerUnit: 2.5 }],
+    });
+  });
+
+  test('close filters zero collections and maps voucher to credit', async () => {
+    mockApiFetch.mockResolvedValueOnce(undefined);
+
+    await expect(shiftRepo.close({
+      id: 'sh1',
+      readings: [{ nozzleId: 'n1', closingReading: '250' }],
+      collections: { cash: 0, card: '150', mobileMoney: '', voucher: '25' },
+      varianceReason: 'cash shortage',
+    })).resolves.toEqual({ success: true });
+
+    const body = (mockApiFetch.mock.calls[0][1] as { body: { collections: unknown[] } }).body;
+    expect(body.collections).toEqual([
+      { paymentMethod: 'Card', amount: 150 },
+      { paymentMethod: 'Credit', amount: 25 },
+    ]);
+  });
+
+  test('getOpen without a station falls back to the open shift station and reading id', async () => {
+    mockApiFetch
+      .mockResolvedValueOnce(page([
+        { id: 'sh1', stationId: 's-fallback', startTime: '2026-01-01T08:00:00.000Z', endTime: '2026-01-01T16:00:00.000Z', status: 'open', openedBy: null },
+      ], 1))
+      .mockResolvedValueOnce({
+        id: 'sh1',
+        stationId: 's-fallback',
+        startTime: '2026-01-01T08:00:00.000Z',
+        endTime: '2026-01-01T16:00:00.000Z',
+        openedBy: null,
+        openingMeterReadings: [{ nozzleId: 'missing-nozzle', value: '10', pricePerUnit: '1.5' }],
+      });
+    mockSetup.nozzles.list.mockResolvedValue([]);
+
+    const open = await shiftRepo.getOpen();
+
+    expect(mockSetup.nozzles.list).toHaveBeenCalledWith('s-fallback');
+    expect(open).toMatchObject({
+      endTime: '2026-01-01T16:00:00.000Z',
+      cashierId: '',
+      readings: [{ nozzleId: 'missing-nozzle', nozzleCode: 'missing-nozzle', openingReading: 10, pricePerUnit: 1.5 }],
+    });
+  });
+});
+
+describe('saleRepo variants', () => {
+  test('list maps transaction dates and totals', async () => {
+    mockApiFetch.mockResolvedValueOnce(page([
+      { id: 'sale-list', branchId: 'b1', transactionDate: '2026-03-01T10:00:00.000Z', totalAmount: '99.5', status: 'posted' },
+    ], 1));
+
+    const rows = await saleRepo.list();
+
+    expect(rows[0]).toMatchObject({ id: 'sale-list', totalAmount: 99.5, paymentType: 'Cash' });
+    expect(rows[0].timestamp).toBe('2026-03-01T10:00:00.000Z');
+  });
+
+  test('create classifies credit payments from API response', async () => {
+    wireDefaultContext();
+    mockApiFetch.mockResolvedValueOnce({
+      id: 'sale-credit',
+      transactionDate: '2026-01-01T00:00:00.000Z',
+      totalAmount: '25',
+      payments: [{ paymentMethod: 'Credit Account', amount: '25' }],
+    });
+
+    const sale = await saleRepo.create({
+      nozzleId: 'n1',
+      productId: 'p1',
+      quantity: '5',
+      pricePerUnit: '5',
+      discount: '',
+      payment: { voucher: '25' },
+    });
+
+    expect(sale.paymentType).toBe('Credit');
+    expect(sale.payment).toEqual({ cash: 0, card: 0, mobile: 0, voucher: 25 });
+  });
+
+  test('create falls back to Cash when API returns no payment rows', async () => {
+    wireDefaultContext();
+    mockApiFetch.mockResolvedValueOnce({
+      id: 'sale-cash',
+      transactionDate: '2026-01-01T00:00:00.000Z',
+      totalAmount: '10',
+      payments: [],
+    });
+
+    const sale = await saleRepo.create({
+      nozzleId: 'n1',
+      productId: 'p1',
+      quantity: 1,
+      pricePerUnit: 10,
+      payment: { cash: 10 },
+    });
+
+    expect(sale.paymentType).toBe('Cash');
+  });
+});
+
+describe('inventory and payables repository mappers', () => {
+  test('maps reconciliation nullable and numeric fields', async () => {
+    mockApiFetch.mockResolvedValueOnce(page([
+      { id: 'rec1', reconciliationDate: '2026-04-01T00:00:00.000Z', expectedVolume: '100', actualVolume: null, variance: '-5', status: 'open' },
+    ], 1));
+
+    expect(await reconciliationRepo.list()).toEqual([
+      { id: 'rec1', reconciliationDate: '2026-04-01', expectedVolume: 100, actualVolume: null, variance: -5, status: 'open' },
+    ]);
+  });
+
+  test('maps variance nullable fields', async () => {
+    mockApiFetch.mockResolvedValueOnce(page([
+      { id: 'var1', tankId: null, varianceDate: '2026-04-02T00:00:00.000Z', volumeVariance: '-12.5', valueVariance: null, classification: null },
+    ], 1));
+
+    expect(await varianceRepo.list()).toEqual([
+      { id: 'var1', tankId: null, varianceDate: '2026-04-02', volumeVariance: -12.5, valueVariance: null, classification: null },
+    ]);
+  });
+
+  test('maps transfer and adjustment list rows', async () => {
+    mockApiFetch
+      .mockResolvedValueOnce(page([
+        { id: 'tr1', transferType: 'station', fromTankId: null, toTankId: 't2', quantity: '42', transferDate: '2026-04-03T00:00:00.000Z', status: 'pending' },
+      ], 1))
+      .mockResolvedValueOnce(page([
+        { id: 'adj1', tankId: 't1', adjustmentDate: '2026-04-04T00:00:00.000Z', volumeDelta: '-3', reason: 'dip correction', status: 'posted' },
+      ], 1));
+
+    expect(await transferRepo.list()).toEqual([
+      { id: 'tr1', transferType: 'station', fromTankId: null, toTankId: 't2', quantity: 42, transferDate: '2026-04-03', status: 'pending' },
+    ]);
+    expect(await adjustmentRepo.list()).toEqual([
+      { id: 'adj1', tankId: 't1', adjustmentDate: '2026-04-04', volumeDelta: -3, reason: 'dip correction', status: 'posted' },
+    ]);
+  });
+
+  test('maps supplier invoices and aging reports', async () => {
+    const aging = { asOf: '2026-04-30', buckets: [{ bucket: '0-30', fromDays: 0, toDays: 30, amount: 200, count: 2 }], total: 200 };
+    mockApiFetch
+      .mockResolvedValueOnce(page([
+        { id: 'si1', supplierId: 'sup1', invoiceNumber: 'SI-1', invoiceDate: '2026-04-01T00:00:00.000Z', dueDate: '2026-04-30T00:00:00.000Z', totalAmount: '300', balanceRemaining: '120', status: 'partial' },
+      ], 1))
+      .mockResolvedValueOnce(aging)
+      .mockResolvedValueOnce({ ...aging, total: 500 });
+
+    expect(await supplierInvoiceRepo.list()).toEqual([
+      { id: 'si1', supplierId: 'sup1', invoiceNumber: 'SI-1', invoiceDate: '2026-04-01', dueDate: '2026-04-30', totalAmount: 300, balanceRemaining: 120, status: 'partial' },
+    ]);
+    expect(await payablesAgingRepo.getReport()).toEqual(aging);
+    expect(await creditAgingRepo.getReport()).toMatchObject({ total: 500 });
+  });
+});
+
+describe('expenseCategoryRepo', () => {
+  test('lists categories and creates with default context', async () => {
+    wireDefaultContext();
+    mockApiFetch
+      .mockResolvedValueOnce(page([
+        { id: 'cat1', code: 'FUEL', name: 'Fuel', description: null, status: 'active' },
+      ], 1))
+      .mockResolvedValueOnce({ id: 'cat2', code: 'MAINT', name: 'Maintenance', description: null, status: 'active' });
+
+    expect(await expenseCategoryRepo.list()).toEqual([
+      { id: 'cat1', code: 'FUEL', name: 'Fuel', description: null, status: 'active' },
+    ]);
+    expect(await expenseCategoryRepo.create({ code: 'MAINT', name: 'Maintenance' })).toMatchObject({ id: 'cat2' });
+    const body = (mockApiFetch.mock.calls[mockApiFetch.mock.calls.length - 1][1] as { body: Record<string, unknown> }).body;
+    expect(body).toEqual({
+      companyId: 'c1',
+      branchId: 'b1',
+      code: 'MAINT',
+      name: 'Maintenance',
+      description: undefined,
+    });
   });
 });

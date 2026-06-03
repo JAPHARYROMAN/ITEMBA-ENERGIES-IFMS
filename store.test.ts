@@ -1,6 +1,15 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('./lib/api/auth', () => ({
+  getMe: vi.fn(),
+  login: vi.fn(),
+  logout: vi.fn(),
+}));
+
+import * as apiAuth from './lib/api/auth';
 import {
   useAppStore,
+  useAuthStore,
   useReportsStore,
   hasPermission,
   hasAnyPermission,
@@ -10,10 +19,14 @@ import {
 
 // Capture pristine initial states so each test starts clean.
 const appInitial = useAppStore.getState();
+const authInitial = useAuthStore.getState();
 const reportsInitial = useReportsStore.getState();
+const mockApiAuth = vi.mocked(apiAuth);
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
+  vi.clearAllMocks();
   document.documentElement.classList.remove('dark');
   useAppStore.setState(
     {
@@ -26,6 +39,7 @@ beforeEach(() => {
     },
     true,
   );
+  useAuthStore.setState(authInitial, true);
   useReportsStore.setState(reportsInitial, true);
 });
 
@@ -222,5 +236,132 @@ describe('permission helpers', () => {
     expect(
       matchesPermissionRequirement(user, ['sales:read', 'sales:pos'], 'all'),
     ).toBe(true);
+  });
+});
+
+describe('useAuthStore', () => {
+  test('hydrateAuth exits early when auth is already ready', async () => {
+    await useAuthStore.getState().hydrateAuth();
+    expect(mockApiAuth.getMe).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().isAuthReady).toBe(true);
+  });
+
+  test('hydrateAuth marks ready when no access token is available', async () => {
+    useAuthStore.setState({ ...authInitial, isAuthReady: false }, true);
+
+    await useAuthStore.getState().hydrateAuth();
+
+    expect(mockApiAuth.getMe).not.toHaveBeenCalled();
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isAuthenticated: false,
+      isAuthReady: true,
+    });
+  });
+
+  test('hydrateAuth maps manager users from permissions', async () => {
+    sessionStorage.setItem('ifms_access_token', 'access-1');
+    useAuthStore.setState({ ...authInitial, isAuthReady: false }, true);
+    mockApiAuth.getMe.mockResolvedValue({
+      id: 'u1',
+      email: 'manager@ifms.local',
+      name: 'Manager',
+      status: 'active',
+      permissions: ['setup:write', 'setup:write', 'reports:read'],
+    });
+
+    await useAuthStore.getState().hydrateAuth();
+
+    expect(useAuthStore.getState().user).toEqual({
+      id: 'u1',
+      email: 'manager@ifms.local',
+      name: 'Manager',
+      role: 'manager',
+      permissions: ['setup:write', 'reports:read'],
+    });
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+  });
+
+  test('hydrateAuth maps auditor users and clears tokens on failure', async () => {
+    sessionStorage.setItem('ifms_access_token', 'access-2');
+    useAuthStore.setState({ ...authInitial, isAuthReady: false }, true);
+    mockApiAuth.getMe.mockResolvedValueOnce({
+      id: 'u2',
+      email: 'auditor@ifms.local',
+      name: 'Auditor',
+      status: 'active',
+      permissions: ['expenses:read'],
+    });
+
+    await useAuthStore.getState().hydrateAuth();
+    expect(useAuthStore.getState().user?.role).toBe('auditor');
+
+    sessionStorage.setItem('ifms_access_token', 'access-3');
+    sessionStorage.setItem('ifms_refresh_token', 'refresh-3');
+    useAuthStore.setState({ ...authInitial, isAuthReady: false }, true);
+    mockApiAuth.getMe.mockRejectedValueOnce(new Error('expired'));
+
+    await useAuthStore.getState().hydrateAuth();
+
+    expect(sessionStorage.getItem('ifms_access_token')).toBeNull();
+    expect(sessionStorage.getItem('ifms_refresh_token')).toBeNull();
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isAuthenticated: false,
+      isAuthReady: true,
+    });
+  });
+
+  test('loginWithCredentials stores tokens and maps cashier fallback role', async () => {
+    mockApiAuth.login.mockResolvedValue({
+      accessToken: 'access-login',
+      refreshToken: 'refresh-login',
+      expiresIn: 3600,
+    });
+    mockApiAuth.getMe.mockResolvedValue({
+      id: 'u3',
+      email: 'cashier@ifms.local',
+      name: 'Cashier',
+      status: 'active',
+      permissions: ['sales:pos'],
+    });
+
+    await useAuthStore.getState().loginWithCredentials?.('cashier@ifms.local', 'secret');
+
+    expect(mockApiAuth.login).toHaveBeenCalledWith('cashier@ifms.local', 'secret');
+    expect(sessionStorage.getItem('ifms_access_token')).toBe('access-login');
+    expect(sessionStorage.getItem('ifms_refresh_token')).toBe('refresh-login');
+    expect(useAuthStore.getState().user?.role).toBe('cashier');
+  });
+
+  test('logout calls API when refresh token exists and always clears local auth state', async () => {
+    sessionStorage.setItem('ifms_access_token', 'access');
+    sessionStorage.setItem('ifms_refresh_token', 'refresh');
+    useAuthStore.setState(
+      {
+        ...authInitial,
+        user: {
+          id: 'u1',
+          name: 'Manager',
+          email: 'manager@ifms.local',
+          role: 'manager',
+          permissions: ['setup:write'],
+        },
+        isAuthenticated: true,
+      },
+      true,
+    );
+    mockApiAuth.logout.mockRejectedValueOnce(new Error('network'));
+
+    useAuthStore.getState().logout();
+    await Promise.resolve();
+
+    expect(mockApiAuth.logout).toHaveBeenCalledWith('refresh');
+    expect(sessionStorage.getItem('ifms_access_token')).toBeNull();
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      isAuthenticated: false,
+      isAuthReady: true,
+    });
   });
 });

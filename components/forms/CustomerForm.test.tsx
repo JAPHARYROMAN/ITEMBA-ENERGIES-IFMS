@@ -1,13 +1,51 @@
 import React from 'react';
-import { describe, test, expect, afterEach, vi } from 'vitest';
+import { describe, test, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CustomerForm } from './CustomerForm';
 
+const mocks = vi.hoisted(() => ({
+  addToast: vi.fn(),
+  customerCreate: vi.fn(),
+}));
+
+vi.mock('../../store', async (importActual) => {
+  const actual = await importActual<typeof import('../../store')>();
+  return {
+    ...actual,
+    useAppStore: () => ({ addToast: mocks.addToast }),
+    useAuthStore: () => ({
+      user: {
+        id: 'user-1',
+        name: 'Credit Manager',
+        email: 'credit@example.com',
+        role: 'manager',
+        permissions: ['credit:write'],
+      },
+    }),
+  };
+});
+
+vi.mock('../../lib/repositories', () => ({
+  customerRepo: {
+    create: mocks.customerCreate,
+  },
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.customerCreate.mockResolvedValue({ id: 'cust-created' });
+});
+
 afterEach(cleanup);
 
 function renderForm() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
   const onSuccess = vi.fn();
   const onCancel = vi.fn();
   render(
@@ -16,6 +54,14 @@ function renderForm() {
     </QueryClientProvider>,
   );
   return { onSuccess, onCancel };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 describe('CustomerForm', () => {
@@ -44,6 +90,92 @@ describe('CustomerForm', () => {
     expect(
       await screen.findByText(/Name must be at least 3 characters/i),
     ).toBeInTheDocument();
+  });
+
+  test('normalizes optional fields and creates a suspended COD customer', async () => {
+    const { onSuccess } = renderForm();
+
+    fireEvent.change(screen.getByLabelText(/Legal Business Name/i), {
+      target: { value: 'Acme Fleet Services' },
+    });
+    fireEvent.change(screen.getByLabelText(/Phone Number/i), {
+      target: { value: '+254 555 0100' },
+    });
+    fireEvent.change(screen.getByLabelText(/Tax ID/i), { target: { value: 'VAT-123' } });
+    fireEvent.change(screen.getByLabelText(/Credit Exposure Limit/i), {
+      target: { value: '2500' },
+    });
+    fireEvent.change(screen.getByLabelText(/Payment Terms/i), { target: { value: 'cod' } });
+    fireEvent.change(screen.getByLabelText(/Account Status/i), {
+      target: { value: 'suspended' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Authorize Account/i }));
+
+    await waitFor(() =>
+      expect(mocks.customerCreate).toHaveBeenCalledWith({
+        name: 'Acme Fleet Services',
+        email: undefined,
+        phone: '+254 555 0100',
+        address: undefined,
+        taxId: 'VAT-123',
+        creditLimit: 2500,
+        paymentTerms: 'cod',
+        status: 'suspended',
+      }),
+    );
+    expect(mocks.addToast).toHaveBeenCalledWith('Customer saved successfully', 'success');
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  test('reports invalid email and negative credit limit without calling the repository', async () => {
+    renderForm();
+
+    fireEvent.change(screen.getByLabelText(/Legal Business Name/i), {
+      target: { value: 'Acme Fleet Services' },
+    });
+    fireEvent.change(screen.getByLabelText(/Billing Email/i), {
+      target: { value: 'not-an-email' },
+    });
+    fireEvent.change(screen.getByLabelText(/Credit Exposure Limit/i), {
+      target: { value: '-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Authorize Account/i }));
+
+    expect(await screen.findByText(/Invalid email/i)).toBeInTheDocument();
+    expect(screen.getByText(/Limit cannot be negative/i)).toBeInTheDocument();
+    expect(mocks.customerCreate).not.toHaveBeenCalled();
+  });
+
+  test('shows loading state while create is pending', async () => {
+    const pending = deferred<{ id: string }>();
+    mocks.customerCreate.mockReturnValueOnce(pending.promise);
+    renderForm();
+
+    fireEvent.change(screen.getByLabelText(/Legal Business Name/i), {
+      target: { value: 'Pending Account Ltd' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Authorize Account/i }));
+
+    expect(await screen.findByText(/Syncing/i)).toBeInTheDocument();
+    pending.resolve({ id: 'cust-pending' });
+  });
+
+  test('surfaces repository failure and does not complete the form', async () => {
+    mocks.customerCreate.mockRejectedValueOnce({
+      apiError: { message: 'Credit registry offline' },
+    });
+    const { onSuccess } = renderForm();
+
+    fireEvent.change(screen.getByLabelText(/Legal Business Name/i), {
+      target: { value: 'Blocked Account Ltd' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Authorize Account/i }));
+
+    await waitFor(() =>
+      expect(mocks.addToast).toHaveBeenCalledWith('Credit registry offline', 'error'),
+    );
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 
   test('Cancel triggers onCancel callback', () => {
