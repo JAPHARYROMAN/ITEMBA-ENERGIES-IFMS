@@ -127,7 +127,11 @@ describe('ReportsService cache key building', () => {
 
 describe('ReportsService report execution', () => {
   const companyA = '11111111-1111-1111-1111-111111111111';
+  const companyB = '22222222-2222-2222-2222-222222222222';
   const branchA = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const branchB = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const stationA = '33333333-3333-3333-3333-333333333333';
+  const productA = '44444444-4444-4444-4444-444444444444';
 
   let drizzle: DrizzleMock;
   let logger: { log: jest.Mock; warn: jest.Mock; debug: jest.Mock };
@@ -152,6 +156,31 @@ describe('ReportsService report execution', () => {
     endpoint: '/reports/test',
     correlationId: 'corr-1',
     scope,
+  };
+
+  const multiScope: ReportScopeContext = {
+    userId: 'user-2',
+    permissions: [
+      `company:${companyA}`,
+      `company:${companyB}`,
+      `branch:${branchA}`,
+      `branch:${branchB}`,
+    ],
+    companyIds: [companyA, companyB],
+    branchIds: [branchA, branchB],
+  };
+
+  const multiCtx: ReportPerfContext = {
+    endpoint: '/reports/test',
+    correlationId: 'corr-2',
+    scope: multiScope,
+  };
+
+  const filteredQuery = {
+    dateFrom: '2026-02-01',
+    dateTo: '2026-02-28',
+    stationId: stationA,
+    productId: productA,
   };
 
   const makeService = (configOverrides: Record<string, unknown> = {}) => {
@@ -289,6 +318,37 @@ describe('ReportsService report execution', () => {
       await service.getOverview({}, ctx);
       expect(opsMetrics.recordReportCacheHit).not.toHaveBeenCalled();
     });
+
+    it('applies multi-scope date/station/product filters and classifies normal variance', async () => {
+      drizzle.queue([{ revenue: '25' }]);
+      drizzle.queue([{ liters: '10', cogs: '7.5' }]);
+      drizzle.queue([{ avgAbs: '0.125' }]);
+      drizzle.queue([{ overdue: '4' }]);
+      drizzle.queue([{ overdue: '3' }]);
+      drizzle.queue([{ date: '2026-02-01', amount: '25' }]);
+      drizzle.queue([{ name: 'Card', value: '25' }]);
+      drizzle.queue([{ station: 'Beta', variance: 25 }]);
+      drizzle.queue([]);
+
+      const result = await service.getOverview(filteredQuery, multiCtx);
+
+      expect(result.kpis.shrinkage.value).toBe(0.125);
+      expect(result.salesTrend).toEqual([{ date: '2026-02-01', amount: 25 }]);
+      expect(result.paymentMix).toEqual([{ name: 'Card', value: 25 }]);
+      expect(result.varianceByStation).toEqual([
+        { station: 'Beta', variance: 25, status: 'Normal' },
+      ]);
+      expect(reportsMv.getSalesTrendFromViews).toHaveBeenCalledWith(
+        expect.objectContaining({
+          companyIds: [companyA, companyB],
+          branchIds: [branchA, branchB],
+          stationId: stationA,
+          productId: productA,
+          dateFrom: '2026-02-01',
+          dateTo: '2026-02-28',
+        }),
+      );
+    });
   });
 
   describe('getDailyOperations', () => {
@@ -346,6 +406,35 @@ describe('ReportsService report execution', () => {
       expect(result.stats.auditCompliancePct).toBe(0);
       expect(result.stats.pendingClosures).toBe(0);
     });
+
+    it('uses view payment mix and reports healthy pump usage with zero expected shift sales', async () => {
+      reportsMv.getPaymentMixFromViews.mockResolvedValueOnce([{ name: 'Mobile', value: 15 }]);
+      drizzle.queue([
+        {
+          id: 's3',
+          startTime: new Date(),
+          endTime: new Date(),
+          status: 'closed',
+          cashierName: 'Alice',
+          expectedSales: '0',
+          actualSales: '50',
+          variance: '0',
+        },
+      ]);
+      drizzle.queue([
+        { pumpCode: 'P2', nozzleCode: 'N2', product: 'Petrol', liters: '5000', avgPrice: '2' },
+      ]);
+
+      const result = await service.getDailyOperations(filteredQuery, multiCtx);
+
+      expect(result.payments).toEqual([{ name: 'Mobile', value: 15 }]);
+      expect(result.shifts[0].efficiency).toBe(0);
+      expect(result.pumps[0]).toMatchObject({
+        revenue: 10000,
+        uptime: 99.9,
+        status: 'Healthy',
+      });
+    });
   });
 
   describe('getStockLoss', () => {
@@ -376,6 +465,26 @@ describe('ReportsService report execution', () => {
       const result = await service.getStockLoss({}, ctx);
       expect(result.tankLosses[0].product).toBe('Unknown');
     });
+
+    it('applies filtered stock-loss queries and defaults missing received quantity to zero', async () => {
+      drizzle.queue([
+        { tankId: 't2', station: 'Gamma', product: 'Petrol', currentLevel: '0', variance: '0' },
+      ]);
+      drizzle.queue([{ date: '2026-02-01', rate: '0' }]);
+      drizzle.queue([{ id: 'd2', date: '2026-02-02', ordered: '120', received: null }]);
+
+      const result = await service.getStockLoss(filteredQuery, multiCtx);
+
+      expect(result.tankLosses[0]).toMatchObject({
+        expected: 0,
+        actual: 0,
+        variancePct: 0,
+      });
+      expect(result.deliveryReconciliation[0]).toMatchObject({
+        received: 0,
+        variance: -120,
+      });
+    });
   });
 
   describe('getProfitability', () => {
@@ -395,6 +504,24 @@ describe('ReportsService report execution', () => {
       expect(result.stationContribution[0].grossMargin).toBe(700);
       // price impact is deterministic
       expect(result.priceImpact.delta.revenue).toBeCloseTo(5000, 0);
+    });
+
+    it('keeps zero-revenue profitability rows stable under filtered multi-scope queries', async () => {
+      drizzle.queue([{ revenue: '0', liters: '0' }]);
+      drizzle.queue([{ name: 'Petrol', revenue: '0', liters: '0' }]);
+      drizzle.queue([
+        { id: 'st-zero', name: 'Zero Station', location: null, revenue: '0', liters: '0' },
+      ]);
+
+      const result = await service.getProfitability(filteredQuery, multiCtx);
+
+      expect(result.metrics.marginPerLiter.value).toBe(0);
+      expect(result.marginByProduct[0]).toMatchObject({ margin: 0, marginPerLiter: 0 });
+      expect(result.stationContribution[0]).toMatchObject({
+        location: '',
+        grossMargin: 0,
+        marginPct: 0,
+      });
     });
   });
 
@@ -428,6 +555,46 @@ describe('ReportsService report execution', () => {
       expect(dueNow?.amount).toBe(40);
       expect(result.liquidity.totalPayables).toBe(70);
     });
+
+    it('buckets middle aging ranges and enriches a healthy debtor with pending invoices', async () => {
+      const now = Date.now();
+      const day = 86400000;
+      drizzle.queue([
+        { dueDate: new Date(now - 45 * day), amount: '80' },
+        { dueDate: new Date(now - 75 * day), amount: '20' },
+      ]);
+      drizzle.queue([
+        { dueDate: new Date(now + 3 * day), amount: '15' },
+        { dueDate: new Date(now + 15 * day), amount: '25' },
+      ]);
+      drizzle.queue([{ id: 'cust-healthy', name: 'Healthy Co', balance: '200', limit: '1000' }]);
+      drizzle.queue([]);
+      drizzle.queue([
+        {
+          customerId: 'cust-healthy',
+          invoiceNumber: 'INV-FUTURE',
+          amount: '50',
+          invoiceDate: new Date(now),
+          dueDate: new Date(now + 10 * day),
+        },
+      ]);
+
+      const result = await service.getCreditCashflow(filteredQuery, multiCtx);
+
+      expect(result.arAging.find((b) => b.bucket === '31-60 Days')?.amount).toBe(80);
+      expect(result.arAging.find((b) => b.bucket === '61-90 Days')?.amount).toBe(20);
+      expect(result.apAging.find((b) => b.bucket === 'Next 7 Days')?.amount).toBe(15);
+      expect(result.apAging.find((b) => b.bucket === 'Next 30 Days')?.amount).toBe(25);
+      expect(result.topDebtors[0]).toMatchObject({
+        status: 'Healthy',
+        lastPaymentAmount: 0,
+        lastPayment: null,
+      });
+      expect(result.topDebtors[0].invoices[0]).toMatchObject({
+        id: 'INV-FUTURE',
+        status: 'Pending',
+      });
+    });
   });
 
   describe('getStationComparison', () => {
@@ -449,6 +616,28 @@ describe('ReportsService report execution', () => {
       expect(result[0].rank).toBe(1);
       expect(result[0].trend).toEqual([{ value: 2000 }]);
       expect(result[1].name).toBe('Alpha');
+    });
+
+    it('returns an empty trend when a ranked station has no matching trend rows', async () => {
+      drizzle.queue([
+        { id: 'st1', name: 'Alpha', location: null, revenue: '100', liters: '40' },
+      ]);
+      drizzle.queue([]);
+
+      const result = await service.getStationComparison(
+        { dateFrom: '2026-02-01', dateTo: '2026-02-28', stationId: stationA },
+        multiCtx,
+      );
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          name: 'Alpha',
+          location: '',
+          rank: 1,
+          percentile: 100,
+          trend: [],
+        }),
+      ]);
     });
   });
 
@@ -549,6 +738,12 @@ describe('ReportsService report execution', () => {
         process.env.NODE_ENV = prevEnv;
         process.env.REPORTS_EXPLAIN = prevExplain;
       }
+    });
+
+    it('execQuery propagates query failures when EXPLAIN is disabled', async () => {
+      await expect((service as any).execQuery('failing.query', Promise.reject(new Error('db failed')))).rejects.toThrow(
+        'db failed',
+      );
     });
   });
 

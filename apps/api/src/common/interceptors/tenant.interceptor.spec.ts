@@ -52,4 +52,56 @@ describe('TenantInterceptor', () => {
       ForbiddenException,
     );
   });
+
+  it('skips public/auth/ai requests and allows unscoped users when no company is requested', async () => {
+    const next = { handle: jest.fn(() => of('ok')) };
+
+    await expect(
+      firstValueFrom(new TenantInterceptor().intercept(contextFor({ url: '/auth/login' }), next)),
+    ).resolves.toBe('ok');
+    await expect(
+      firstValueFrom(
+        new TenantInterceptor().intercept(
+          contextFor({ url: '/api/ai/chat', user: { permissions: [] } }),
+          next,
+        ),
+      ),
+    ).resolves.toBe('ok');
+    await expect(
+      firstValueFrom(
+        new TenantInterceptor().intercept(
+          contextFor({ url: '/api/reports', user: { permissions: [] }, params: {}, body: {}, query: {} }),
+          next,
+        ),
+      ),
+    ).resolves.toBe('ok');
+  });
+
+  it('rejects requested company ids when the account has no company scope', () => {
+    const request = {
+      url: '/api/reports/overview',
+      params: { companyId: companyA },
+      body: {},
+      query: {},
+      user: { permissions: ['reports:read'] },
+    };
+
+    expect(() => new TenantInterceptor().intercept(contextFor(request), { handle: jest.fn() })).toThrow(
+      'No company scopes are assigned to this account',
+    );
+  });
+
+  it('checks requested company ids from params, body, and query', async () => {
+    const request = {
+      url: '/api/reports/overview',
+      params: { companyId: companyA },
+      body: { companyId: companyA },
+      query: { companyId: companyA },
+      user: { permissions: [`company:${companyA}`] },
+    };
+    const next = { handle: jest.fn(() => of('ok')) };
+
+    await expect(firstValueFrom(new TenantInterceptor().intercept(contextFor(request), next))).resolves.toBe('ok');
+    expect(request).toHaveProperty('tenantScope', { companyIds: [companyA], branchIds: [] });
+  });
 });
