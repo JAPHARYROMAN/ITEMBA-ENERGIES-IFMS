@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
 import { SelectField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { ShiftStepper } from '../ifms/forms/ShiftStepper';
 import {
   stationRepo,
@@ -265,8 +266,7 @@ export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
                         key={i}
                         className="flex items-center gap-3 p-3 border border-border rounded-xl bg-muted/20"
                       >
-                        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Static display-only checkbox (hardcoded checked/readOnly, not registered to the form); CheckboxField is register-bound and would change this decorative element's behavior. */}
-                        <input
+                        <FieldInput
                           type="checkbox"
                           checked={i === 0}
                           readOnly
@@ -314,8 +314,7 @@ export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Inline table cell needs custom width/alignment, conditional error border, aria-label, and an onKeyDown handler for meter-to-meter keyboard navigation that NumberField does not support. */}
-                          <input
+                          <FieldInput
                             {...methods.register(`readings.${index}.openingReading` as const, {
                               valueAsNumber: true,
                             })}

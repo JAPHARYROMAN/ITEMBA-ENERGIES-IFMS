@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState } from '../ifms/forms/Primitives';
 import { TextField, NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
+import { FieldTextarea } from '../ifms/forms/RawFields';
 import { expenseRepo, branchRepo } from '../../lib/repositories';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { hasAnyPermission, useAppStore, useAuthStore } from '../../store';
@@ -379,8 +380,7 @@ export const ExpenseEntryForm: React.FC<{
                 Mandatory audit rationale required for refusal.
               </p>
             </div>
-            {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Controlled by local React state (rejectionReason), not react-hook-form; TextareaField is register/FormProvider-bound and cannot represent this modal-local field. */}
-            <textarea
+            <FieldTextarea
               value={rejectionReason}
               onChange={(e) => setRejectionReason(e.target.value)}
               placeholder="e.g. Insufficient documentation, vendor mismatch, or duplicated entry..."

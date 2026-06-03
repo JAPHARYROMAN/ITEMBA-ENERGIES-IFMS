@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '../../lib/api/client';
 import { useAppStore } from '../../store';
+import { FieldInput, FieldTextarea } from '../ifms/forms/RawFields';
 
 interface ReconciliationFormValues {
   shiftId: string;
@@ -42,25 +43,21 @@ export function ReconciliationForm({ onSuccess, onCancel }: { onSuccess: () => v
     <form onSubmit={handleSubmit((v) => mutation.mutateAsync(v))} className="space-y-4 p-4">
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Shift ID (optional)</label>
-        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- TextField requires FormProvider context (this form uses bare useForm) and renders its own label, which would duplicate the existing label. */}
-        <input {...register('shiftId')} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" placeholder="Shift UUID" />
+        <FieldInput {...register('shiftId')} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" placeholder="Shift UUID" />
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Expected Volume (L)</label>
-        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- NumberField registers with valueAsNumber and no rules; converting drops the inline `required` validation and changes the value type. */}
-        <input {...register('expectedVolume', { required: 'Required' })} type="number" step="0.01" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
+        <FieldInput {...register('expectedVolume', { required: 'Required' })} type="number" step="0.01" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
         {errors.expectedVolume && <p className="text-xs text-rose-600">{errors.expectedVolume.message}</p>}
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Actual Volume (L)</label>
-        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- NumberField registers with valueAsNumber and no rules; converting drops the inline `required` validation and changes the value type. */}
-        <input {...register('actualVolume', { required: 'Required' })} type="number" step="0.01" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
+        <FieldInput {...register('actualVolume', { required: 'Required' })} type="number" step="0.01" className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
         {errors.actualVolume && <p className="text-xs text-rose-600">{errors.actualVolume.message}</p>}
       </div>
       <div className="space-y-1.5">
         <label className="block text-xs font-black uppercase tracking-wider text-muted-foreground">Notes</label>
-        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- TextareaField requires FormProvider context (this form uses bare useForm) and renders its own label, which would duplicate the existing label. */}
-        <textarea {...register('notes')} rows={3} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
+        <FieldTextarea {...register('notes')} rows={3} className="w-full rounded-xl border border-border bg-background px-4 py-2.5 text-sm" />
       </div>
       <div className="flex gap-2 pt-2">
         <button type="submit" disabled={mutation.isPending} className="rounded-xl bg-primary px-4 py-2.5 text-xs font-black uppercase text-primary-foreground hover:opacity-90 disabled:opacity-60">

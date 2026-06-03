@@ -20,6 +20,7 @@ import { hasPermission, useAuthStore, useAppStore } from '../../store';
 import { productRepo, nozzleRepo, saleRepo } from '../../lib/repositories';
 import { useActiveStation } from '../../lib/hooks/useActiveStation';
 import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { FormSubmitState } from '../ifms/forms/Primitives';
 import { permissionGroups } from '../../lib/permissions';
 import { MAX_DISCOUNT, QUICK_PAYMENT_PRESETS } from '../../lib/constants';
@@ -281,8 +282,7 @@ const POSPage: React.FC = () => {
                       <tender.icon size={14} className={tender.color} />
                       <span className="text-[10px] font-black uppercase">{tender.label}</span>
                     </div>
-                    {/* eslint-disable-next-line ifms/no-raw-form-inputs -- borderless inline tender cell with custom styling; NumberField wrapper would inject label/border markup and change layout */}
-                    <input
+                    <FieldInput
                       {...methods.register(tender.name, { valueAsNumber: true })}
                       type="number"
                       step="0.01"

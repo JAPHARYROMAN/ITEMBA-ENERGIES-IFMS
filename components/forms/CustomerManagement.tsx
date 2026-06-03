@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { CustomerSchema, Customer, Invoice, CustomerPayment } from '../../lib/models';
 import { FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
 import { TextField, NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
+import { FieldTextarea } from '../ifms/forms/RawFields';
 import { customerRepo, invoiceRepo, paymentRepo } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { IFMSDataTable } from '../ifms/DataTable';
@@ -365,8 +366,7 @@ export const CustomerManagement: React.FC<{
                     <div className="p-6 bg-muted/20 border border-dashed border-border rounded-2xl">
                       {editingNoteId === 0 ? (
                         <>
-                          {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Controlled by local React state (noteContent), not react-hook-form; TextareaField is register/FormProvider-bound and cannot represent this note editor. */}
-                          <textarea
+                          <FieldTextarea
                             value={noteContent}
                             onChange={(e) => setNoteContent(e.target.value)}
                             className="w-full min-h-24 p-4 text-sm font-medium bg-background border border-input rounded-xl mb-4 focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all resize-y no-scrollbar"
@@ -421,8 +421,7 @@ export const CustomerManagement: React.FC<{
                     </div>
                     {showNewNote ? (
                       <div className="p-6 border border-border rounded-2xl bg-card space-y-4">
-                        {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Controlled by local React state (newNoteText), not react-hook-form; TextareaField is register/FormProvider-bound and cannot represent this note editor. */}
-                        <textarea
+                        <FieldTextarea
                           value={newNoteText}
                           onChange={(e) => setNewNoteText(e.target.value)}
                           className="w-full min-h-24 p-4 text-sm font-medium bg-background border border-input rounded-xl focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all resize-y no-scrollbar"

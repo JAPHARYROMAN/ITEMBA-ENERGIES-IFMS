@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
 import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { customerRepo, invoiceRepo, paymentRepo } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
@@ -290,8 +291,7 @@ export const RecordPaymentForm: React.FC<{
                         {isAllocated && (
                           <div className="flex items-center gap-4 animate-in slide-in-from-top-2">
                             <div className="flex-1">
-                              {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Controlled via setValue with custom onChange that clamps to the invoice balance and splices the allocations array; NumberField is register-bound and cannot express this per-row allocation logic. */}
-                              <input
+                              <FieldInput
                                 type="number"
                                 step="0.01"
                                 value={currentAlloc.amount}

@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
 import { NumberField, TextareaField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { ShiftStepper } from '../ifms/forms/ShiftStepper';
 import ComputedFieldBlock from '../ifms/forms/patterns/ComputedFieldBlock';
 import { shiftRepo } from '../../lib/repositories';
@@ -320,8 +321,7 @@ export const CloseShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => v
                               </span>
                             </td>
                             <td className="px-6 py-4">
-                              {/* eslint-disable-next-line ifms/no-raw-form-inputs -- Inline table cell needs custom width/alignment, conditional error border, aria-label, and an onKeyDown handler for meter-to-meter keyboard navigation that NumberField does not support. */}
-                              <input
+                              <FieldInput
                                 {...methods.register(`readings.${index}.closingReading` as const, {
                                   valueAsNumber: true,
                                 })}
