@@ -1,6 +1,6 @@
 
 import React, { useRef, useCallback } from 'react';
-import { useFormContext, useFieldArray } from 'react-hook-form';
+import { useFormContext, useFieldArray, type FieldErrors } from 'react-hook-form';
 import { cn } from '@/lib/utils';
 
 /* ================================================================
@@ -25,8 +25,10 @@ export const MeterReadingsGrid: React.FC<MeterReadingsGridProps> = ({
   const gridRef = useRef<HTMLDivElement>(null);
 
   const getNestedError = (idx: number, field: string): string | undefined => {
-    const arr = (errors as any)?.[name];
-    return arr?.[idx]?.[field]?.message as string | undefined;
+    const arr = (errors as FieldErrors)?.[name] as
+      | Record<number, Record<string, { message?: string }>>
+      | undefined;
+    return arr?.[idx]?.[field]?.message;
   };
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>, rowIdx: number, colIdx: number) => {

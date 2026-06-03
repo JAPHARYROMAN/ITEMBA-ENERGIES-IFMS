@@ -17,7 +17,7 @@ export interface Notification {
     severity: 'info' | 'success' | 'warning' | 'critical';
     title: string;
     body?: string;
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
     actionUrl?: string;
     createdAt: string;
   };
@@ -209,12 +209,12 @@ export function useOptimisticMarkRead() {
     queryClient.cancelQueries({ queryKey: ['notifications'] });
 
     // Snapshot the previous value
-    const previousNotifications = queryClient.getQueryData(['notifications']);
+    const _previousNotifications = queryClient.getQueryData(['notifications']);
 
     // Optimistically update to the new value
     queryClient.setQueryData(['notifications'], (old: NotificationListResponse | undefined) => {
       if (!old?.deliveries) return old;
-      
+
       return {
         ...old,
         deliveries: old.deliveries.map((notification) =>
@@ -224,9 +224,6 @@ export function useOptimisticMarkRead() {
         ),
       };
     });
-
-    // Return a context object with the snapshotted value
-    const context = { previousNotifications };
 
     // Try to make the API call
     markReadMutation.mutate(deliveryId, {
@@ -256,12 +253,12 @@ export function useOptimisticArchive() {
     queryClient.cancelQueries({ queryKey: ['notifications'] });
 
     // Snapshot the previous value
-    const previousNotifications = queryClient.getQueryData(['notifications']);
+    const _previousNotifications = queryClient.getQueryData(['notifications']);
 
     // Optimistically update to the new value
     queryClient.setQueryData(['notifications'], (old: NotificationListResponse | undefined) => {
       if (!old?.deliveries) return old;
-      
+
       return {
         ...old,
         deliveries: old.deliveries.filter((notification) =>
@@ -269,9 +266,6 @@ export function useOptimisticArchive() {
         ),
       };
     });
-
-    // Return a context object with the snapshotted value
-    const context = { previousNotifications };
 
     // Try to make the API call
     archiveMutation.mutate(deliveryId, {

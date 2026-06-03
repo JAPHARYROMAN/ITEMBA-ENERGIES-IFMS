@@ -12,8 +12,6 @@ import {
   BarChart,
   Bar,
   Cell,
-  PieChart,
-  Pie,
 } from 'recharts';
 import { apiReports } from '../../lib/api/reports';
 import PageHeader from '../ifms/PageHeader';
@@ -24,6 +22,53 @@ import { useReportsStore } from '../../store';
 import { TrendingUp, AlertTriangle, Users } from 'lucide-react';
 import { ExportButton } from '../ifms/ExportButton';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+
+type TrendDirection = 'up' | 'down' | 'neutral';
+
+interface KpiMetric {
+  value: number;
+  change: number;
+  trend: TrendDirection;
+}
+
+interface OverviewKpis {
+  totalSales: KpiMetric;
+  litersSold: KpiMetric;
+  grossMargin: KpiMetric;
+  shrinkage: KpiMetric;
+  receivables: KpiMetric;
+  payables: KpiMetric;
+}
+
+interface SalesTrendPoint {
+  date: string;
+  amount: number;
+}
+
+interface PaymentMixEntry {
+  name: string;
+  value: number;
+}
+
+interface VarianceByStationRow {
+  station: string;
+  variance: number;
+  status: string;
+}
+
+interface TopDebtorRow {
+  name: string;
+  balance: number;
+  utilization: number;
+}
+
+interface OverviewResponse {
+  kpis: OverviewKpis;
+  salesTrend: SalesTrendPoint[];
+  paymentMix: PaymentMixEntry[];
+  varianceByStation: VarianceByStationRow[];
+  topDebtors: TopDebtorRow[];
+}
 
 const ReportsOverview: React.FC = () => {
   const { t } = useTranslation();
@@ -37,7 +82,7 @@ const ReportsOverview: React.FC = () => {
   };
   const overviewQuery = useQuery({
     queryKey: ['reports-overview', filters],
-    queryFn: () => apiReports.overview(filters) as Promise<any>,
+    queryFn: () => apiReports.overview(filters) as Promise<OverviewResponse>,
   });
 
   const isLoading = overviewQuery.isLoading;
@@ -68,37 +113,37 @@ const ReportsOverview: React.FC = () => {
           label="Total Revenue"
           value={fmtCompact(kpis?.totalSales.value ?? 0)}
           delta={kpis?.totalSales.change}
-          trend={kpis?.totalSales.trend as any}
+          trend={kpis?.totalSales.trend}
         />
         <StatCard
           label="Fuel Volume"
           value={`${kpis?.litersSold.value.toLocaleString()} L`}
           delta={kpis?.litersSold.change}
-          trend={kpis?.litersSold.trend as any}
+          trend={kpis?.litersSold.trend}
         />
         <StatCard
           label="Gross Margin"
           value={fmtCompact(kpis?.grossMargin.value ?? 0)}
           delta={kpis?.grossMargin.change}
-          trend={kpis?.grossMargin.trend as any}
+          trend={kpis?.grossMargin.trend}
         />
         <StatCard
           label="Shrinkage Rate"
           value={`${kpis?.shrinkage.value}%`}
           delta={kpis?.shrinkage.change}
-          trend={kpis?.shrinkage.trend as any}
+          trend={kpis?.shrinkage.trend}
         />
         <StatCard
           label="Overdue AR"
           value={fmtCompact(kpis?.receivables.value ?? 0)}
           delta={kpis?.receivables.change}
-          trend={kpis?.receivables.trend as any}
+          trend={kpis?.receivables.trend}
         />
         <StatCard
           label="Overdue AP"
           value={fmtCompact(kpis?.payables.value ?? 0)}
           delta={kpis?.payables.change}
-          trend={kpis?.payables.trend as any}
+          trend={kpis?.payables.trend}
         />
       </div>
 
@@ -177,7 +222,7 @@ const ReportsOverview: React.FC = () => {
                 />
                 <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ borderRadius: '8px' }} />
                 <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                  {paymentMix?.map((_: any, index: number) => (
+                  {paymentMix?.map((_, index) => (
                     <Cell
                       key={index}
                       fill={
@@ -192,7 +237,7 @@ const ReportsOverview: React.FC = () => {
             </ResponsiveContainer>
           </div>
           <div className="mt-6 space-y-2">
-            {paymentMix?.map((p: any, i: number) => (
+            {paymentMix?.map((p, i) => (
               <div key={i} className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">{p.name}</span>
                 <span className="font-bold">{fmtCompact(p.value)}</span>
@@ -222,7 +267,7 @@ const ReportsOverview: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {varianceByStation?.map((v: any, i: number) => (
+              {varianceByStation?.map((v, i) => (
                 <tr key={i} className="text-xs hover:bg-muted/30 transition-colors">
                   <td className="px-6 py-4 font-bold">{v.station}</td>
                   <td
@@ -262,7 +307,7 @@ const ReportsOverview: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {topDebtors?.map((d: any, i: number) => (
+              {topDebtors?.map((d, i) => (
                 <tr key={i} className="text-xs hover:bg-muted/30 transition-colors">
                   <td className="px-6 py-4 font-bold">{d.name}</td>
                   <td className="px-6 py-4 text-right font-bold">{fmtCompact(d.balance)}</td>

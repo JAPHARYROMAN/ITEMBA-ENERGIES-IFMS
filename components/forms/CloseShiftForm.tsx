@@ -1,17 +1,18 @@
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useForm, FormProvider, useWatch, useFieldArray } from 'react-hook-form';
+import { useForm, FormProvider, useFieldArray, type FieldPath } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, NumberField, TextareaField, ReadOnlyField } from '../ifms/forms/Fields';
+import { NumberField, TextareaField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { ShiftStepper } from '../ifms/forms/ShiftStepper';
-import ComputedFieldBlock, { ComputedItem } from '../ifms/forms/patterns/ComputedFieldBlock';
+import ComputedFieldBlock from '../ifms/forms/patterns/ComputedFieldBlock';
 import { shiftRepo } from '../../lib/repositories';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useAppStore, useAuthStore } from '../../store';
 import { useActiveStation } from '../../lib/hooks/useActiveStation';
-import { ArrowLeft, ArrowRight, Printer, CheckCircle2, AlertTriangle, Wallet } from 'lucide-react';
+import { ArrowRight, Printer, CheckCircle2 } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
 import { CLOSE_SHIFT_DRAFT_KEY } from '../../lib/constants';
 import { getStorageItem, setStorageItem, removeStorageItem } from '../../lib/storage';
@@ -73,7 +74,7 @@ type CloseShiftFormData = z.infer<typeof schema>;
 
 export const CloseShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => void }> = ({
   onSuccess,
-  onCancel,
+  onCancel: _onCancel,
 }) => {
   const { t } = useTranslation();
   const [step, setStep] = useState(0);
@@ -101,7 +102,6 @@ export const CloseShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => v
   const {
     handleSubmit,
     control,
-    setValue,
     watch,
     formState: { isSubmitting, errors },
   } = methods;
@@ -156,8 +156,9 @@ export const CloseShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => v
   });
 
   const nextStep = async () => {
-    const fieldsToValidate = step === 0 ? ['readings'] : ['collections', 'varianceReason'];
-    const isValid = await methods.trigger(fieldsToValidate as any);
+    const fieldsToValidate: FieldPath<CloseShiftFormData>[] =
+      step === 0 ? ['readings'] : ['collections', 'varianceReason'];
+    const isValid = await methods.trigger(fieldsToValidate);
     if (isValid) setStep((s) => s + 1);
   };
 
@@ -320,7 +321,7 @@ export const CloseShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => v
                               </span>
                             </td>
                             <td className="px-6 py-4">
-                              <input
+                              <FieldInput
                                 {...methods.register(`readings.${index}.closingReading` as const, {
                                   valueAsNumber: true,
                                 })}

@@ -1,15 +1,30 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useForm, FormProvider } from 'react-hook-form';
+import { useForm, FormProvider, type DefaultValues } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState } from '../ifms/forms/Primitives';
 import { TextField, NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
+import { FieldTextarea } from '../ifms/forms/RawFields';
 import { expenseRepo, branchRepo } from '../../lib/repositories';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { hasAnyPermission, useAppStore, useAuthStore } from '../../store';
 import { ShieldCheck, AlertCircle, FileText, CheckCircle2, XCircle, Paperclip } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
+import type { Expense, ExpenseStatus } from '../../lib/models';
+
+/** Shape of API errors thrown by the repositories (see ApiErrorLike in lib/repositories). */
+interface ExpenseApiError {
+  message?: string;
+  apiError?: {
+    message?: string;
+    approvalRequestId?: string;
+    details?: {
+      message?: { approvalRequestId?: string };
+      approvalRequestId?: string;
+    };
+  };
+}
 
 const schema = z.object({
   id: z.string().optional(),
@@ -26,11 +41,11 @@ const schema = z.object({
 type ExpenseFormData = z.infer<typeof schema>;
 
 export const ExpenseEntryForm: React.FC<{
-  initialData?: any;
+  initialData?: Expense;
   onSuccess: () => void;
   onCancel: () => void;
 }> = ({ initialData, onSuccess, onCancel }) => {
-  const { t } = useTranslation();
+  useTranslation();
   const { user } = useAuthStore();
   const { addToast } = useAppStore();
   const queryClient = useQueryClient();
@@ -43,7 +58,10 @@ export const ExpenseEntryForm: React.FC<{
 
   const methods = useForm<ExpenseFormData>({
     resolver: zodResolver(schema),
-    defaultValues: initialData || { paymentMethod: 'Bank Transfer', status: 'Draft' },
+    defaultValues: (initialData || {
+      paymentMethod: 'Bank Transfer',
+      status: 'Draft',
+    }) as DefaultValues<ExpenseFormData>,
   });
 
   const { data: branches } = useQuery({ queryKey: ['branches'], queryFn: () => branchRepo.list() });
@@ -55,7 +73,7 @@ export const ExpenseEntryForm: React.FC<{
       }
       return expenseRepo.create(data);
     },
-    onSuccess: (saved: any) => {
+    onSuccess: (saved: Expense) => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
       queryClient.invalidateQueries({ queryKey: ['governance-approvals'] });
       const approvalId = saved?.governanceApprovalRequestId;
@@ -73,7 +91,8 @@ export const ExpenseEntryForm: React.FC<{
       }
       onSuccess();
     },
-    onError: (err: any) => {
+    onError: (error: unknown) => {
+      const err = error as ExpenseApiError;
       const details = err?.apiError?.details;
       const nested = details?.message;
       const approvalRequestId =
@@ -90,7 +109,7 @@ export const ExpenseEntryForm: React.FC<{
   });
 
   const approvalMutation = useMutation({
-    mutationFn: ({ id, status, reason }: { id: string; status: any; reason?: string }) =>
+    mutationFn: ({ id, status, reason }: { id: string; status: ExpenseStatus; reason?: string }) =>
       expenseRepo.updateStatus(id, status, reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
@@ -99,7 +118,8 @@ export const ExpenseEntryForm: React.FC<{
       setRejecting(false);
       onSuccess();
     },
-    onError: (err: any) => {
+    onError: (error: unknown) => {
+      const err = error as ExpenseApiError;
       addToast(
         err?.apiError?.message ?? err?.message ?? 'Failed to update expense status',
         'error',
@@ -360,7 +380,7 @@ export const ExpenseEntryForm: React.FC<{
                 Mandatory audit rationale required for refusal.
               </p>
             </div>
-            <textarea
+            <FieldTextarea
               value={rejectionReason}
               onChange={(e) => setRejectionReason(e.target.value)}
               placeholder="e.g. Insufficient documentation, vendor mismatch, or duplicated entry..."

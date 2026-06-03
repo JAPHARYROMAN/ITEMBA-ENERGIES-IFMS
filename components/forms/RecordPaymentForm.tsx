@@ -1,15 +1,17 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useForm, FormProvider, useWatch, useFieldArray } from 'react-hook-form';
+import { useForm, FormProvider } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, NumberField, SelectField, ReadOnlyField } from '../ifms/forms/Fields';
+import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { customerRepo, invoiceRepo, paymentRepo } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
-import { CreditCard, CheckSquare, Square, Zap, Info } from 'lucide-react';
+import { CheckSquare, Square, Zap, Info } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
+import { getErrorMessage } from '../../lib/utils';
 
 const schema = z
   .object({
@@ -65,10 +67,9 @@ export const RecordPaymentForm: React.FC<{
 
   const {
     handleSubmit,
-    control,
     setValue,
     watch,
-    formState: { isSubmitting, errors },
+    formState: { isSubmitting },
   } = methods;
   const values = watch();
   const selectedCustomerId = watch('customerId');
@@ -87,7 +88,7 @@ export const RecordPaymentForm: React.FC<{
     if (!unpaidInvoices || !values.amount) return;
 
     let remaining = values.amount;
-    const newAllocations: any[] = [];
+    const newAllocations: PaymentFormData['allocations'] = [];
 
     // FIFO allocation
     const sorted = [...unpaidInvoices].sort(
@@ -118,8 +119,8 @@ export const RecordPaymentForm: React.FC<{
       addToast(t('forms.saveSuccess', { entity: 'Payment' }), 'success');
       onSuccess();
     },
-    onError: (err: any) => {
-      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to record payment', 'error');
+    onError: (err: unknown) => {
+      addToast(getErrorMessage(err, 'Failed to record payment'), 'error');
     },
   });
 
@@ -290,7 +291,7 @@ export const RecordPaymentForm: React.FC<{
                         {isAllocated && (
                           <div className="flex items-center gap-4 animate-in slide-in-from-top-2">
                             <div className="flex-1">
-                              <input
+                              <FieldInput
                                 type="number"
                                 step="0.01"
                                 value={currentAlloc.amount}

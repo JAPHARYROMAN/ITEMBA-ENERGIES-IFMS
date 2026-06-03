@@ -1,6 +1,6 @@
 
 import React, { useMemo } from 'react';
-import { useFormContext, useFieldArray } from 'react-hook-form';
+import { useFormContext, type FieldErrors } from 'react-hook-form';
 import { AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ComputedFieldBlock, { type ComputedItem } from './ComputedFieldBlock';
@@ -15,6 +15,13 @@ interface Tank {
   capacity: number;
   currentLevel: number;
 }
+
+interface AllocationRow {
+  tankId?: string;
+  qty?: number | string;
+}
+
+type AllocationFieldError = { message?: string };
 
 interface AllocationEditorProps {
   name: string;
@@ -34,16 +41,22 @@ export const AllocationEditor: React.FC<AllocationEditorProps> = ({
   description = 'Distribute received volume across tanks. Must sum exactly to total.',
 }) => {
   const { register, watch, formState: { errors } } = useFormContext();
-  const allocations = watch(name) || [];
+  const watchedAllocations = watch(name) as AllocationRow[] | undefined;
 
   const totalAllocated = useMemo(
-    () => allocations.reduce((sum: number, a: any) => sum + (Number(a.qty) || 0), 0),
-    [allocations],
+    () =>
+      (watchedAllocations ?? []).reduce(
+        (sum: number, a: AllocationRow) => sum + (Number(a.qty) || 0),
+        0,
+      ),
+    [watchedAllocations],
   );
   const remaining = totalQty - totalAllocated;
   const isBalanced = Math.abs(remaining) < 0.01;
 
-  const arrErrors = (errors as any)?.[name];
+  const arrErrors = (errors as FieldErrors)?.[name] as
+    | Record<number, { qty?: AllocationFieldError }>
+    | undefined;
 
   const computedItems: ComputedItem[] = [
     { label: 'Total Received', value: `${totalQty.toLocaleString()} L`, status: 'neutral' },

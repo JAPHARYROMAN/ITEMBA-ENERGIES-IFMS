@@ -6,6 +6,13 @@ import PageHeader from '../ifms/PageHeader';
 import { apiExports } from '../../lib/api/exports';
 import { useAppStore } from '../../store';
 
+type ApiThrownError = Error & { apiError?: { message?: string } };
+
+const getErrorMessage = (err: unknown, fallback: string): string => {
+  const e = err as ApiThrownError | undefined;
+  return e?.apiError?.message ?? e?.message ?? fallback;
+};
+
 const ExportsPage: React.FC = () => {
   const { t } = useTranslation();
   const { addToast } = useAppStore();
@@ -91,11 +98,8 @@ const ExportsPage: React.FC = () => {
                       onClick={async () => {
                         try {
                           await apiExports.download(item);
-                        } catch (err: any) {
-                          addToast(
-                            err?.apiError?.message ?? err?.message ?? 'Download failed',
-                            'error',
-                          );
+                        } catch (err: unknown) {
+                          addToast(getErrorMessage(err, 'Download failed'), 'error');
                         }
                       }}
                       disabled={item.status !== 'ready'}
@@ -116,11 +120,9 @@ const ExportsPage: React.FC = () => {
                       onClick={async () => {
                         try {
                           await apiExports.downloadVerificationReceipt(item);
-                        } catch (err: any) {
+                        } catch (err: unknown) {
                           addToast(
-                            err?.apiError?.message ??
-                              err?.message ??
-                              'Verification receipt download failed',
+                            getErrorMessage(err, 'Verification receipt download failed'),
                             'error',
                           );
                         }

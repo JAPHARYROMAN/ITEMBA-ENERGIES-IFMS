@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useForm, FormProvider, useFieldArray } from 'react-hook-form';
+import { useForm, FormProvider, useFieldArray, type FieldPath } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
+import { SelectField } from '../ifms/forms/Fields';
+import { FieldInput } from '../ifms/forms/RawFields';
 import { ShiftStepper } from '../ifms/forms/ShiftStepper';
 import {
   stationRepo,
@@ -16,7 +17,7 @@ import {
 } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
-import { ArrowLeft, ArrowRight, Save, LayoutGrid, Fuel, Users } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Save, Fuel } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
 import { getErrorMessage } from '../../lib/utils';
 import { getStorageItem, setStorageItem, removeStorageItem } from '../../lib/storage';
@@ -43,7 +44,7 @@ type OpenShiftFormData = z.infer<typeof schema>;
 
 export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => void }> = ({
   onSuccess,
-  onCancel,
+  onCancel: _onCancel,
 }) => {
   const { t } = useTranslation();
   const [step, setStep] = useState(0);
@@ -110,12 +111,12 @@ export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
   });
 
   const nextStep = async () => {
-    const fieldsToValidate =
+    const fieldsToValidate: FieldPath<OpenShiftFormData>[] =
       step === 0
         ? ['companyId', 'stationId', 'branchId', 'type', 'cashierId', 'attendantIds']
         : ['readings'];
 
-    const isValid = await methods.trigger(fieldsToValidate as any);
+    const isValid = await methods.trigger(fieldsToValidate);
     if (isValid) setStep((s) => s + 1);
   };
 
@@ -134,7 +135,7 @@ export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
     if (!draft) return;
     const { _step, ...values } = draft;
     if (values.companyId) {
-      methods.reset(values as any);
+      methods.reset(values as OpenShiftFormData);
       if (typeof _step === 'number') setStep(_step as number);
       addToast('Draft restored', 'info');
       removeStorageItem(OPEN_SHIFT_DRAFT_KEY);
@@ -265,7 +266,7 @@ export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
                         key={i}
                         className="flex items-center gap-3 p-3 border border-border rounded-xl bg-muted/20"
                       >
-                        <input
+                        <FieldInput
                           type="checkbox"
                           checked={i === 0}
                           readOnly
@@ -313,7 +314,7 @@ export const OpenShiftForm: React.FC<{ onSuccess: () => void; onCancel: () => vo
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <input
+                          <FieldInput
                             {...methods.register(`readings.${index}.openingReading` as const, {
                               valueAsNumber: true,
                             })}

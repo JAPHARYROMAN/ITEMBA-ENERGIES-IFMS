@@ -64,6 +64,10 @@ jobs:
 
       - name: Run frontend tests
         run: npx vitest run
+        env:
+          # Unit tests don't hit a real backend; demo mode satisfies the
+          # frontend env schema so vite.config.ts loads without VITE_API_URL.
+          VITE_DEMO_MODE: 'true'
 
       - name: Install API deps
         run: npm ci
@@ -106,7 +110,7 @@ jobs:
         working-directory: apps/api
 
       - name: Run database migrations
-        run: npx drizzle-kit push
+        run: npm run db:migrate:ci
         working-directory: apps/api
         env:
           DATABASE_URL: postgresql://ifms:ifms_test@localhost:5432/ifms_test
@@ -141,6 +145,11 @@ jobs:
 
       - name: Build web
         run: npm run build
+        env:
+          # Validates the production build compiles; demo mode satisfies the
+          # frontend env schema without a real backend URL. Real deploys set
+          # VITE_API_URL via the build/release environment.
+          VITE_DEMO_MODE: 'true'
 
       - name: Install API deps
         run: npm ci
@@ -150,9 +159,13 @@ jobs:
         run: npm run build
         working-directory: apps/api
 
-      - name: Check migrations are up to date
-        run: npx drizzle-kit generate --check
+      - name: Check migration consistency
+        run: npx drizzle-kit check
         working-directory: apps/api
+        env:
+          # drizzle.config.ts exits if DATABASE_URL is unset; `check` only reads
+          # local migration files and never connects, so a placeholder suffices.
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
 
   security:
     runs-on: ubuntu-latest
@@ -180,10 +193,9 @@ jobs:
         run: npm ci
         working-directory: apps/api
 
-      - name: Audit API dependencies (non-blocking pending Nest 11 upgrade)
+      - name: Audit API dependencies
         run: npm audit --audit-level=high
         working-directory: apps/api
-        continue-on-error: true
 
       - name: Summarize API audit status
         if: always()

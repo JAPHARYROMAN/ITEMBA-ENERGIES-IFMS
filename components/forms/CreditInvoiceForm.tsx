@@ -4,7 +4,7 @@ import { useForm, FormProvider, useFieldArray, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, NumberField, SelectField, ReadOnlyField } from '../ifms/forms/Fields';
+import { TextField, NumberField, SelectField } from '../ifms/forms/Fields';
 import ComputedFieldBlock from '../ifms/forms/patterns/ComputedFieldBlock';
 import { customerRepo, productRepo, invoiceRepo } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import { useAppStore } from '../../store';
 import { Plus, Trash2, Scale, AlertCircle } from 'lucide-react';
 import { permissionGroups } from '../../lib/permissions';
 import { useCurrency } from '../../lib/hooks/useCurrency';
+import { getErrorMessage } from '../../lib/utils';
 
 const schema = z.object({
   customerId: z.string().min(1, 'Customer is required'),
@@ -60,8 +61,6 @@ export const CreditInvoiceForm: React.FC<{
   const {
     handleSubmit,
     control,
-    setValue,
-    watch,
     formState: { isSubmitting, errors },
   } = methods;
   const { fields, append, remove } = useFieldArray({ control, name: 'items' });
@@ -92,8 +91,8 @@ export const CreditInvoiceForm: React.FC<{
       addToast(t('forms.saveSuccess', { entity: 'Invoice' }), 'success');
       onSuccess();
     },
-    onError: (err: any) => {
-      addToast(err?.apiError?.message ?? err?.message ?? 'Failed to create invoice.', 'error');
+    onError: (err: unknown) => {
+      addToast(getErrorMessage(err, 'Failed to create invoice.'), 'error');
     },
   });
 

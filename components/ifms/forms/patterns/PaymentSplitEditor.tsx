@@ -1,7 +1,7 @@
 
 import React, { useMemo } from 'react';
-import { useFormContext, useFieldArray } from 'react-hook-form';
-import { Plus, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useFormContext, useFieldArray, type FieldErrors } from 'react-hook-form';
+import { Plus, Trash2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ComputedFieldBlock, { type ComputedItem } from './ComputedFieldBlock';
 
@@ -16,6 +16,17 @@ interface PaymentSplitEditorProps {
   description?: string;
   paymentMethods?: { label: string; value: string }[];
 }
+
+interface PaymentSplitRow {
+  method?: string;
+  amount?: number | string;
+}
+
+type SplitFieldError = { message?: string };
+type PaymentSplitErrors = Record<
+  number,
+  { method?: SplitFieldError; amount?: SplitFieldError }
+>;
 
 const INPUT_CELL = 'w-full h-9 bg-background border border-input rounded-lg px-3 text-sm font-medium focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all tabular-nums';
 
@@ -35,8 +46,15 @@ export const PaymentSplitEditor: React.FC<PaymentSplitEditorProps> = ({
   const { control, register, watch, formState: { errors } } = useFormContext();
   const { fields, append, remove } = useFieldArray({ control, name });
 
-  const splits = watch(name) || [];
-  const totalAllocated = useMemo(() => splits.reduce((sum: number, s: any) => sum + (Number(s.amount) || 0), 0), [splits]);
+  const splits = watch(name) as PaymentSplitRow[] | undefined;
+  const totalAllocated = useMemo(
+    () =>
+      (splits ?? []).reduce(
+        (sum: number, s: PaymentSplitRow) => sum + (Number(s.amount) || 0),
+        0,
+      ),
+    [splits],
+  );
   const remaining = totalDue - totalAllocated;
   const isBalanced = Math.abs(remaining) < 0.01;
 
@@ -46,7 +64,7 @@ export const PaymentSplitEditor: React.FC<PaymentSplitEditorProps> = ({
     { label: 'Remaining', value: `$${remaining.toFixed(2)}`, status: isBalanced ? 'success' : remaining > 0 ? 'warning' : 'error' },
   ];
 
-  const arrErrors = (errors as any)?.[name];
+  const arrErrors = (errors as FieldErrors)?.[name] as PaymentSplitErrors | undefined;
 
   return (
     <div className="md:col-span-2 space-y-4">

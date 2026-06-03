@@ -20,7 +20,7 @@ interface Notification {
     severity: 'info' | 'success' | 'warning' | 'critical';
     title: string;
     body?: string;
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
     actionUrl?: string;
     createdAt: string;
   };
@@ -65,7 +65,10 @@ export function NotificationsDrawer({
   const firstFocusableRef = useRef<HTMLButtonElement>(null);
 
   // Combine regular and realtime notifications
-  const allNotifications = [...realtimeNotifications, ...notifications];
+  const allNotifications = React.useMemo(
+    () => [...realtimeNotifications, ...notifications],
+    [realtimeNotifications, notifications],
+  );
 
   // Filter notifications based on active tab and filters
   const filteredNotifications = React.useMemo(() => {

@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Test coverage output
+coverage
+*.lcov
+
 # Environment and secrets
 .env
 .env.*

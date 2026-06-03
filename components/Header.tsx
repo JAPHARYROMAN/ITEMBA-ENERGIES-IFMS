@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sun, Moon, Bell, Search, LogOut, Info, Command, Sparkles } from 'lucide-react';
+import { Sun, Moon, Search, LogOut, Info, Command, Sparkles } from 'lucide-react';
 import { useAppStore, useAuthStore } from '../store';
 import Breadcrumbs from './ifms/Breadcrumbs';
 import { NotificationBell } from './ifms/notifications/NotificationBell';
@@ -33,7 +33,7 @@ const Header: React.FC = () => {
 
   const notifications = notificationsData?.deliveries || [];
 
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [, setNotificationsOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

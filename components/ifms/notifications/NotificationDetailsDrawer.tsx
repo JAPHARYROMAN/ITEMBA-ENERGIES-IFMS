@@ -20,7 +20,7 @@ interface Notification {
     severity: 'info' | 'success' | 'warning' | 'critical';
     title: string;
     body?: string;
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
     actionUrl?: string;
     createdAt: string;
   };

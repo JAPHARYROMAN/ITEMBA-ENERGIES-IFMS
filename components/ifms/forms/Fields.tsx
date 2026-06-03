@@ -1,6 +1,6 @@
 
-import React, { useState, useRef, useEffect, useId } from 'react';
-import { useFormContext, Controller } from 'react-hook-form';
+import React, { useState, useRef, useEffect } from 'react';
+import { useFormContext, type FieldErrors, type RegisterOptions } from 'react-hook-form';
 import { FormGrid } from './Primitives';
 import { ChevronDown, X, Calendar, Paperclip, Search } from 'lucide-react';
 
@@ -22,14 +22,18 @@ const INPUT_CLASS = 'w-full h-10 bg-background border border-input rounded-xl px
 const SELECT_CLASS = `${INPUT_CLASS} appearance-none pr-10`;
 const TEXTAREA_CLASS = 'w-full min-h-24 bg-background border border-input rounded-xl p-4 text-sm font-medium focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all resize-y disabled:opacity-50 disabled:bg-muted/30 no-scrollbar';
 
-function getNestedError(errors: any, name: string): string | undefined {
+function getNestedError(errors: FieldErrors, name: string): string | undefined {
   const parts = name.split('.');
-  let current = errors;
+  let current: unknown = errors;
   for (const part of parts) {
-    if (!current) return undefined;
-    current = current[part];
+    if (!current || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[part];
   }
-  return current?.message as string | undefined;
+  if (current && typeof current === 'object' && 'message' in current) {
+    const message = (current as { message?: unknown }).message;
+    return typeof message === 'string' ? message : undefined;
+  }
+  return undefined;
 }
 
 /* ================================================================
@@ -63,20 +67,21 @@ const FieldWrapper: React.FC<BaseFieldProps & { children: React.ReactNode; id?: 
    TextField
    ================================================================ */
 
-export const TextField: React.FC<BaseFieldProps & { placeholder?: string; type?: string }> = (props) => {
+export const TextField: React.FC<BaseFieldProps & { placeholder?: string; type?: string; rules?: RegisterOptions; autoFocus?: boolean; inputClassName?: string }> = (props) => {
   const { register } = useFormContext();
   return (
     <FieldWrapper {...props}>
       <input
         id={props.name}
-        {...register(props.name)}
+        {...register(props.name, props.rules)}
         type={props.type || 'text'}
         placeholder={props.placeholder}
         disabled={props.disabled}
         readOnly={props.readOnly}
+        autoFocus={props.autoFocus}
         aria-describedby={props.hint ? `${props.name}-hint` : undefined}
         aria-invalid={undefined}
-        className={INPUT_CLASS}
+        className={props.inputClassName || INPUT_CLASS}
       />
     </FieldWrapper>
   );
@@ -86,13 +91,13 @@ export const TextField: React.FC<BaseFieldProps & { placeholder?: string; type?:
    NumberField
    ================================================================ */
 
-export const NumberField: React.FC<BaseFieldProps & { placeholder?: string; step?: string; min?: number; max?: number }> = (props) => {
+export const NumberField: React.FC<BaseFieldProps & { placeholder?: string; step?: string; min?: number; max?: number; rules?: RegisterOptions; autoFocus?: boolean; inputClassName?: string }> = (props) => {
   const { register } = useFormContext();
   return (
     <FieldWrapper {...props}>
       <input
         id={props.name}
-        {...register(props.name, { valueAsNumber: true })}
+        {...register(props.name, { valueAsNumber: true, ...props.rules })}
         type="number"
         step={props.step || '1'}
         min={props.min}
@@ -100,8 +105,9 @@ export const NumberField: React.FC<BaseFieldProps & { placeholder?: string; step
         placeholder={props.placeholder}
         disabled={props.disabled}
         readOnly={props.readOnly}
+        autoFocus={props.autoFocus}
         aria-describedby={props.hint ? `${props.name}-hint` : undefined}
-        className={INPUT_CLASS}
+        className={props.inputClassName || INPUT_CLASS}
       />
     </FieldWrapper>
   );
@@ -165,13 +171,13 @@ export const PercentField: React.FC<BaseFieldProps & { placeholder?: string }> =
    SelectField
    ================================================================ */
 
-export const SelectField: React.FC<BaseFieldProps & { options: { label: string; value: string }[]; placeholder?: string }> = ({ placeholder = 'Select an option...', ...props }) => {
+export const SelectField: React.FC<BaseFieldProps & { options: { label: string; value: string }[]; placeholder?: string; rules?: RegisterOptions }> = ({ placeholder = 'Select an option...', ...props }) => {
   const { register } = useFormContext();
   return (
     <FieldWrapper {...props}>
       <select
         id={props.name}
-        {...register(props.name)}
+        {...register(props.name, props.rules)}
         disabled={props.disabled}
         aria-describedby={props.hint ? `${props.name}-hint` : undefined}
         className={SELECT_CLASS}
@@ -361,13 +367,13 @@ export const DateRangeField: React.FC<{ nameFrom: string; nameTo: string; label:
    TextareaField
    ================================================================ */
 
-export const TextareaField: React.FC<BaseFieldProps & { placeholder?: string; rows?: number }> = (props) => {
+export const TextareaField: React.FC<BaseFieldProps & { placeholder?: string; rows?: number; rules?: RegisterOptions }> = (props) => {
   const { register } = useFormContext();
   return (
     <FieldWrapper {...props}>
       <textarea
         id={props.name}
-        {...register(props.name)}
+        {...register(props.name, props.rules)}
         rows={props.rows || 3}
         placeholder={props.placeholder}
         disabled={props.disabled}

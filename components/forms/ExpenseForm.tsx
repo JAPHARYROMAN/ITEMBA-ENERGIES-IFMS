@@ -51,7 +51,12 @@ export const ExpenseForm: React.FC<{ onSuccess: () => void; onCancel: () => void
       addToast(t('forms.saveSuccess', { entity: 'Expense' }), 'success');
       onSuccess();
     },
-    onError: (err: any) => addToast(err?.apiError?.message ?? 'Failed to record expense', 'error'),
+    onError: (err: unknown) =>
+      addToast(
+        (err as { apiError?: { message?: string } })?.apiError?.message ??
+          'Failed to record expense',
+        'error',
+      ),
   });
 
   return (

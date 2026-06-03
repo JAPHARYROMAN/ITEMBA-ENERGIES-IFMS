@@ -83,19 +83,6 @@ export default function NotificationSettingsPage({}: NotificationSettingsPagePro
     }
   };
 
-  const getSeverityDescription = (severity: string) => {
-    switch (severity) {
-      case "info":
-        return "All notifications including informational messages";
-      case "warning":
-        return "Only warnings and critical notifications";
-      case "critical":
-        return "Only critical notifications";
-      default:
-        return "";
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="space-y-6">

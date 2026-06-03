@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useForm, FormProvider } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { CustomerSchema, Customer, Invoice, CustomerPayment } from '../../lib/models';
 import { FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
 import { TextField, NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
+import { FieldTextarea } from '../ifms/forms/RawFields';
 import { customerRepo, invoiceRepo, paymentRepo } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { IFMSDataTable } from '../ifms/DataTable';
@@ -17,13 +17,13 @@ import { FileText, CreditCard, History, StickyNote, User, Building2 } from 'luci
 import { hasAnyPermission, useAppStore, useAuthStore } from '../../store';
 import { addCustomerNote } from '../../lib/api/actions';
 import { permissionGroups } from '../../lib/permissions';
+import { getErrorMessage } from '../../lib/utils';
 
 export const CustomerManagement: React.FC<{
   initialId?: string;
   onSuccess: () => void;
   onCancel: () => void;
 }> = ({ initialId, onSuccess, onCancel }) => {
-  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { addToast } = useAppStore();
   const { user } = useAuthStore();
@@ -315,27 +315,27 @@ export const CustomerManagement: React.FC<{
                       {
                         header: 'Amount',
                         accessorKey: 'totalAmount',
-                        cell: (i: any) => `$${(i as Invoice).totalAmount.toLocaleString()}`,
+                        cell: (i: Invoice) => `$${i.totalAmount.toLocaleString()}`,
                       },
                       {
                         header: 'Balance',
                         accessorKey: 'balanceRemaining',
-                        cell: (i: any) => (
+                        cell: (i: Invoice) => (
                           <span
-                            className={`font-black ${(i as Invoice).balanceRemaining > 0 ? 'text-rose-500' : 'text-emerald-500'}`}
+                            className={`font-black ${i.balanceRemaining > 0 ? 'text-rose-500' : 'text-emerald-500'}`}
                           >
-                            ${(i as Invoice).balanceRemaining.toLocaleString()}
+                            ${i.balanceRemaining.toLocaleString()}
                           </span>
                         ),
                       },
                       {
                         header: 'Status',
                         accessorKey: 'status',
-                        cell: (i: any) => (
+                        cell: (i: Invoice) => (
                           <span
-                            className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${(i as Invoice).status === 'Paid' ? 'bg-emerald-100 text-emerald-800' : (i as Invoice).status === 'Partial' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'}`}
+                            className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${i.status === 'Paid' ? 'bg-emerald-100 text-emerald-800' : i.status === 'Partial' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'}`}
                           >
-                            {(i as Invoice).status}
+                            {i.status}
                           </span>
                         ),
                       },
@@ -354,7 +354,7 @@ export const CustomerManagement: React.FC<{
                       {
                         header: 'Amount',
                         accessorKey: 'amount',
-                        cell: (p: any) => `$${(p as CustomerPayment).amount.toLocaleString()}`,
+                        cell: (p: CustomerPayment) => `$${p.amount.toLocaleString()}`,
                       },
                       { header: 'Ref', accessorKey: 'referenceNo' },
                     ]}
@@ -366,7 +366,7 @@ export const CustomerManagement: React.FC<{
                     <div className="p-6 bg-muted/20 border border-dashed border-border rounded-2xl">
                       {editingNoteId === 0 ? (
                         <>
-                          <textarea
+                          <FieldTextarea
                             value={noteContent}
                             onChange={(e) => setNoteContent(e.target.value)}
                             className="w-full min-h-24 p-4 text-sm font-medium bg-background border border-input rounded-xl mb-4 focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all resize-y no-scrollbar"
@@ -387,11 +387,8 @@ export const CustomerManagement: React.FC<{
                                   await noteMutation.mutateAsync(noteContent);
                                   addToast('Note updated', 'success');
                                   setEditingNoteId(null);
-                                } catch (err: any) {
-                                  addToast(
-                                    err?.apiError?.message ?? err?.message ?? 'Failed to save note',
-                                    'error',
-                                  );
+                                } catch (err: unknown) {
+                                  addToast(getErrorMessage(err, 'Failed to save note'), 'error');
                                 }
                               }}
                               className="text-[9px] font-black uppercase text-primary"
@@ -424,7 +421,7 @@ export const CustomerManagement: React.FC<{
                     </div>
                     {showNewNote ? (
                       <div className="p-6 border border-border rounded-2xl bg-card space-y-4">
-                        <textarea
+                        <FieldTextarea
                           value={newNoteText}
                           onChange={(e) => setNewNoteText(e.target.value)}
                           className="w-full min-h-24 p-4 text-sm font-medium bg-background border border-input rounded-xl focus:ring-2 focus:ring-primary/40 focus:border-primary outline-none transition-all resize-y no-scrollbar"
@@ -449,11 +446,8 @@ export const CustomerManagement: React.FC<{
                                 addToast('Internal note added', 'success');
                                 setNewNoteText('');
                                 setShowNewNote(false);
-                              } catch (err: any) {
-                                addToast(
-                                  err?.apiError?.message ?? err?.message ?? 'Failed to add note',
-                                  'error',
-                                );
+                              } catch (err: unknown) {
+                                addToast(getErrorMessage(err, 'Failed to add note'), 'error');
                               }
                             }}
                             className="px-4 py-2 bg-primary text-primary-foreground text-[10px] font-black uppercase rounded-xl"

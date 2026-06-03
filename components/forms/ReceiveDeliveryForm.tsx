@@ -4,7 +4,7 @@ import { useForm, FormProvider, useWatch, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
+import { NumberField, SelectField, TextareaField } from '../ifms/forms/Fields';
 import ComputedFieldBlock from '../ifms/forms/patterns/ComputedFieldBlock';
 import { deliveryRepo, tankRepo } from '../../lib/repositories';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -89,6 +89,10 @@ export const ReceiveDeliveryForm: React.FC<{
         setValue('allocations.0.quantity', delivery.orderedQty);
       }
     }
+    // `fields` is intentionally omitted: this effect performs one-time prefill, guarded by
+    // `fields.length === 1 && fields[0].quantity === 0`. Including the unstable useFieldArray
+    // `fields` reference would re-run on every render and risk an update loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delivery, productTanks, setValue]);
 
   const variance = useMemo(() => {
@@ -233,7 +237,8 @@ export const ReceiveDeliveryForm: React.FC<{
                   })}
                   {errors.allocations && (
                     <p className="text-[10px] font-bold text-rose-500 px-2">
-                      {errors.allocations.message || (errors.allocations as any).root?.message}
+                      {errors.allocations.message ||
+                        (errors.allocations as { root?: { message?: string } }).root?.message}
                     </p>
                   )}
                 </div>

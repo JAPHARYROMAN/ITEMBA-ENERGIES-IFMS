@@ -8,6 +8,15 @@ interface RealtimeNotification extends Notification {
   isRealtime?: boolean;
 }
 
+interface NotificationNewPayload {
+  delivery: Omit<Notification, 'notification'>;
+  notification: Notification['notification'];
+}
+
+interface UnreadCountPayload {
+  count: number;
+}
+
 interface UseRealtimeNotificationsReturn {
   socket: Socket | null;
   isConnected: boolean;
@@ -53,13 +62,11 @@ export function useRealtimeNotifications(): UseRealtimeNotificationsReturn {
 
         // Connection events
         socketInstance.on('connect', () => {
-          console.log('Real-time notifications connected');
           setIsConnected(true);
           setConnectionError(null);
         });
 
         socketInstance.on('disconnect', (reason) => {
-          console.log('Real-time notifications disconnected:', reason);
           setIsConnected(false);
 
           if (reason === 'io server disconnect') {
@@ -76,8 +83,7 @@ export function useRealtimeNotifications(): UseRealtimeNotificationsReturn {
           setIsConnected(false);
         });
 
-        socketInstance.on('reconnect', (attemptNumber) => {
-          console.log(`Real-time reconnected after ${attemptNumber} attempts`);
+        socketInstance.on('reconnect', () => {
           setIsConnected(true);
           setConnectionError(null);
         });
@@ -87,14 +93,8 @@ export function useRealtimeNotifications(): UseRealtimeNotificationsReturn {
           setConnectionError('Reconnection failed');
         });
 
-        // Authentication events
-        socketInstance.on('connected', (data) => {
-          console.log('Real-time authenticated:', data.userId);
-        });
-
         // Notification events
-        socketInstance.on('notification:new', (payload: any) => {
-          console.log('Real-time notification received:', payload);
+        socketInstance.on('notification:new', (payload: NotificationNewPayload) => {
           const notification: RealtimeNotification = {
             ...payload.delivery,
             notification: payload.notification,
@@ -104,8 +104,7 @@ export function useRealtimeNotifications(): UseRealtimeNotificationsReturn {
           setRealtimeNotifications(prev => [notification, ...prev]);
         });
 
-        socketInstance.on('notification:unreadCount', (payload: any) => {
-          console.log('Real-time unread count update:', payload.count);
+        socketInstance.on('notification:unreadCount', (_payload: UnreadCountPayload) => {
           // This will be handled by the query cache invalidation
         });
 
@@ -132,7 +131,6 @@ export function useRealtimeNotifications(): UseRealtimeNotificationsReturn {
       }
 
       if (socketInstance) {
-        console.log('Cleaning up real-time connection');
         socketInstance.off(); // Remove all listeners
         socketInstance.disconnect();
         setSocket(null);
@@ -143,19 +141,6 @@ export function useRealtimeNotifications(): UseRealtimeNotificationsReturn {
 
   // Handle authentication changes
   useEffect(() => {
-    const handleAuthChange = () => {
-      const token = getAccessToken();
-      if (!token && socket) {
-        console.log('No auth token, disconnecting real-time');
-        socket.disconnect();
-        setSocket(null);
-        setIsConnected(false);
-      } else if (token && !socket) {
-        console.log('Auth token available, reconnecting real-time');
-        // The useEffect above will handle reconnection
-      }
-    };
-
     // Listen for auth logout events
     const handleLogout = () => {
       if (socket) {

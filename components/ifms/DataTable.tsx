@@ -289,7 +289,7 @@ function IFMSDataTableComponent<T extends { id?: string | number }>({
                       <input
                         type="checkbox"
                         checked={selectedRows.has(rowId)}
-                        onChange={(e) => {
+                        onChange={() => {
                           const newSelected = new Set(selectedRows);
                           if (newSelected.has(rowId)) newSelected.delete(rowId);
                           else newSelected.add(rowId);
@@ -305,7 +305,9 @@ function IFMSDataTableComponent<T extends { id?: string | number }>({
                           key={col.accessorKey as string}
                           className="px-6 py-5 text-sm font-bold text-foreground"
                         >
-                          {col.cell ? col.cell(item) : (item[col.accessorKey as keyof T] as any)}
+                          {col.cell
+                            ? col.cell(item)
+                            : (item[col.accessorKey as keyof T] as React.ReactNode)}
                         </td>
                       ))}
                     {hasActions && (

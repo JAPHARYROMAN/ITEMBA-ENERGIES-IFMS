@@ -28,7 +28,7 @@ import { useLocation } from 'react-router-dom';
 import { useAppStore } from '../store';
 import { useAiChat, type ChatMessage, type ResponseCard } from '../lib/hooks/useAiChat';
 import { useTranslation } from 'react-i18next';
-import { apiExports, type ExportRecord } from '../lib/api/exports';
+import { apiExports } from '../lib/api/exports';
 
 // ---------------------------------------------------------------------------
 // Quick-action chips by page context

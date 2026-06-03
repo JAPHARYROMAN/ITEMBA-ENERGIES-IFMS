@@ -1,6 +1,6 @@
 
 import React, { useMemo } from 'react';
-import { useFormContext, useFieldArray } from 'react-hook-form';
+import { useFormContext, useFieldArray, type FieldErrors } from 'react-hook-form';
 import { Plus, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ComputedFieldBlock, { type ComputedItem } from './ComputedFieldBlock';
@@ -19,10 +19,14 @@ interface Column {
   width?: string; // tailwind col-span
 }
 
+type LineItemRow = Record<string, unknown>;
+type RowFieldError = { message?: string };
+type LineItemsErrors = Record<number, Record<string, RowFieldError>>;
+
 interface LineItemsEditorProps {
   name: string;
   columns: Column[];
-  defaultRow: Record<string, any>;
+  defaultRow: LineItemRow;
   title?: string;
   description?: string;
   totalField?: string; // field name within each row to sum for totals
@@ -45,12 +49,15 @@ export const LineItemsEditor: React.FC<LineItemsEditorProps> = ({
   const { control, register, watch, formState: { errors } } = useFormContext();
   const { fields, append, remove } = useFieldArray({ control, name });
 
-  const rows = watch(name) || [];
-  const arrErrors = (errors as any)?.[name];
+  const rows = watch(name) as LineItemRow[] | undefined;
+  const arrErrors = (errors as FieldErrors)?.[name] as LineItemsErrors | undefined;
 
   const grandTotal = useMemo(() => {
     if (!totalField) return 0;
-    return rows.reduce((sum: number, row: any) => sum + (Number(row[totalField]) || 0), 0);
+    return (rows ?? []).reduce(
+      (sum: number, row: LineItemRow) => sum + (Number(row[totalField]) || 0),
+      0,
+    );
   }, [rows, totalField]);
 
   const computedItems: ComputedItem[] = totalField

@@ -1,10 +1,9 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
 import { useForm, FormProvider, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { FormShell, FormSection, FormSubmitState, PermissionGuard } from '../ifms/forms/Primitives';
-import { TextField, SelectField, ToggleField } from '../ifms/forms/Fields';
+import { TextField, SelectField } from '../ifms/forms/Fields';
 import { setupDataSource } from '../../lib/data-source';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAppStore } from '../../store';
@@ -32,9 +31,8 @@ type NozzleFormData = z.infer<typeof schema>;
 export const NozzleSetupForm: React.FC<{
   onSuccess: () => void;
   onCancel: () => void;
-  initialData?: any;
+  initialData?: Partial<NozzleFormData>;
 }> = ({ onSuccess, onCancel, initialData }) => {
-  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { addToast } = useAppStore();
 
