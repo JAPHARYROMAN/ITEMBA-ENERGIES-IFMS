@@ -977,5 +977,160 @@ describe('AiChatService tenant isolation', () => {
       });
       expect(db.select).toHaveBeenCalledTimes(callsBefore);
     });
+
+    it('marks forecast confidence insufficient-data when there are no deliveries', async () => {
+      db.select
+        .mockReturnValueOnce(
+          createSelectChain([
+            { tankCode: 'T1', productId: PRODUCT_ID, productName: 'Diesel', currentLevel: '5000', capacity: '10000', minLevel: '1000' },
+          ]),
+        )
+        .mockReturnValueOnce(createSelectChain([])); // no deliveries
+
+      const result = await (service as any).forecastDemand({ daysBack: 60 }, context());
+      expect(result.forecasts[0]).toMatchObject({
+        avgDailyConsumption: 0,
+        daysUntilReorder: null,
+        estimatedReorderDate: null,
+        confidence: 'insufficient-data',
+      });
+    });
+
+    it('uses low confidence for short forecast windows clamped to the 7-day floor', async () => {
+      db.select
+        .mockReturnValueOnce(
+          createSelectChain([
+            { tankCode: 'T1', productId: PRODUCT_ID, productName: 'Diesel', currentLevel: '5000', capacity: '10000', minLevel: '1000' },
+          ]),
+        )
+        .mockReturnValueOnce(
+          createSelectChain([{ productId: PRODUCT_ID, totalReceived: '700', deliveryCount: 1 }]),
+        );
+
+      const result = await (service as any).forecastDemand({ daysBack: 1 }, context());
+      // daysBack clamps to 7 (< 30) -> 'low'
+      expect(result.analysisWindow).toBe('7 days');
+      expect(result.forecasts[0].confidence).toBe('low');
+    });
+
+    it('filters forecasts by product name, dropping non-matches', async () => {
+      db.select
+        .mockReturnValueOnce(
+          createSelectChain([
+            { tankCode: 'T1', productId: PRODUCT_ID, productName: 'Diesel', currentLevel: '5000', capacity: '10000', minLevel: '1000' },
+            { tankCode: 'T2', productId: PRODUCT_ID, productName: 'Petrol', currentLevel: '3000', capacity: '8000', minLevel: '500' },
+          ]),
+        )
+        .mockReturnValueOnce(
+          createSelectChain([{ productId: PRODUCT_ID, totalReceived: '6000', deliveryCount: 2 }]),
+        );
+
+      const result = await (service as any).forecastDemand({ productName: 'petrol', daysBack: 30 }, context());
+      expect(result.forecasts).toHaveLength(1);
+      expect(result.forecasts[0].product).toBe('Petrol');
+    });
+
+    it('projects cashflow with safe defaults when historical data is empty', async () => {
+      db.select
+        .mockReturnValueOnce(createSelectChain([])) // sales empty
+        .mockReturnValueOnce(createSelectChain([])) // expenses empty
+        .mockReturnValueOnce(createSelectChain([])); // payments empty
+
+      const result = await (service as any).projectCashflow({}, context());
+      expect(result.summary).toEqual({
+        avgDailyRevenue: 0,
+        avgDailyCreditPayments: 0,
+        avgDailyInflow: 0,
+        avgDailyExpenses: 0,
+        avgDailyNet: 0,
+        projectedTotalNet: 0,
+      });
+      expect(result.projection).toHaveLength(14); // default projectionDays
+    });
+
+    it('analyzePricing applies an explicit date range and zero share when revenue is zero', async () => {
+      db.select
+        .mockReturnValueOnce(
+          createSelectChain([{ id: PRODUCT_ID, name: 'Diesel', category: 'fuel', pricePerUnit: '2500' }]),
+        )
+        .mockReturnValueOnce(
+          createSelectChain([{ totalRevenue: '0', totalCount: 0, avgTxValue: '0' }]),
+        )
+        .mockReturnValueOnce(
+          createSelectChain([{ paymentType: 'cash', revenue: '0', count: 0 }]),
+        );
+
+      const result = await (service as any).analyzePricing(
+        { dateFrom: '2026-01-01', dateTo: '2026-01-31' },
+        context(),
+      );
+      expect(result.overview.totalRevenue).toBe(0);
+      expect(result.revenueByPaymentType[0].sharePercent).toBe(0);
+    });
+
+    it('reports a declining trend when the current period falls below the previous', async () => {
+      db.select
+        .mockReturnValueOnce(createSelectChain([{ total: '50', cnt: 1 }])) // current
+        .mockReturnValueOnce(createSelectChain([{ total: '200', cnt: 4 }])); // previous
+
+      const result = await (service as any).analyzeTrends({ metric: 'sales', periodDays: 14 }, context());
+      expect(result.changes.trend).toBe('down');
+      expect(result.changes.trendLabel).toContain('Declining');
+      expect(result.changes.valueChangePercent).toBe(-75);
+    });
+
+    it('reports a stable trend for small period-over-period movements', async () => {
+      db.select
+        .mockReturnValueOnce(createSelectChain([{ total: '102', cnt: 10 }])) // current
+        .mockReturnValueOnce(createSelectChain([{ total: '100', cnt: 10 }])); // previous
+
+      const result = await (service as any).analyzeTrends({ metric: 'sales', periodDays: 14 }, context());
+      expect(result.changes.trend).toBe('stable');
+      expect(result.changes.trendLabel).toContain('Stable');
+    });
+
+    it('reports zero change when both periods are empty', async () => {
+      db.select
+        .mockReturnValueOnce(createSelectChain([{ total: '0', cnt: 0 }]))
+        .mockReturnValueOnce(createSelectChain([{ total: '0', cnt: 0 }]));
+
+      const result = await (service as any).analyzeTrends({ metric: 'sales' }, context());
+      expect(result.changes).toMatchObject({ valueChangePercent: 0, countChangePercent: 0, trend: 'stable' });
+    });
+
+    it('recommends staffing gracefully when there are no closed shifts', async () => {
+      db.select.mockReturnValueOnce(createSelectChain([]));
+      const result = await (service as any).recommendStaffing({ daysBack: 30 }, context());
+      expect(result.shiftTypeAnalysis).toEqual([]);
+      expect(result.dayOfWeekAnalysis).toEqual([]);
+      expect(result.recommendations.peakDays).toEqual([]);
+    });
+
+    it('flags above-average shift types as high priority', async () => {
+      db.select.mockReturnValueOnce(
+        createSelectChain([
+          { type: 'morning', dayOfWeek: '1', totalCollected: '5000', startTime: '2026-01-05T08:00:00Z' },
+          { type: 'night', dayOfWeek: '2', totalCollected: '100', startTime: '2026-01-06T20:00:00Z' },
+        ]),
+      );
+      const result = await (service as any).recommendStaffing({ daysBack: 30 }, context());
+      const morning = result.shiftTypeAnalysis.find((s: any) => s.shiftType === 'morning');
+      expect(morning.recommendation).toContain('HIGH PRIORITY');
+    });
+
+    it('analyzePricing filters the product list by name', async () => {
+      db.select
+        .mockReturnValueOnce(
+          createSelectChain([
+            { id: PRODUCT_ID, name: 'Diesel', category: 'fuel', pricePerUnit: '2500' },
+            { id: PRODUCT_ID, name: 'Petrol', category: 'fuel', pricePerUnit: '3000' },
+          ]),
+        )
+        .mockReturnValueOnce(createSelectChain([{ totalRevenue: '100', totalCount: 1, avgTxValue: '100' }]))
+        .mockReturnValueOnce(createSelectChain([]));
+
+      const result = await (service as any).analyzePricing({ productName: 'diesel' }, context());
+      expect(result.products).toEqual([{ name: 'Diesel', category: 'fuel', currentPricePerUnit: 2500 }]);
+    });
   });
 });

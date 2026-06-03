@@ -105,6 +105,99 @@ describe('TanksService', () => {
     });
   });
 
+  describe('findPage extra branches', () => {
+    it('returns empty result with no filters and ascending sort', async () => {
+      drizzle.queue([]); // data
+      drizzle.queue([]); // count empty -> total 0
+      const res = await service.findPage({ sort: 'code:asc' });
+      expect(res).toEqual({ data: [], total: 0 });
+    });
+  });
+
+  describe('findById without companyId', () => {
+    it('returns the row when found and no company scope supplied', async () => {
+      const row = { id: 't1', code: 'T-01' };
+      drizzle.queue([row]);
+      await expect(service.findById('t1')).resolves.toEqual(row);
+    });
+  });
+
+  describe('create extra branches', () => {
+    it('throws InternalServerErrorException when insert returns nothing', async () => {
+      drizzle.queue([]); // uniqueness ok
+      drizzle.queue([]); // returning empty
+      await expect(
+        service.create({ companyId: 'c1', branchId: 'b1', code: 'T', capacity: 1, maxLevel: 1 }, {}),
+      ).rejects.toThrow('Insert failed');
+    });
+
+    it('translates a pg unique violation into a ConflictException', async () => {
+      drizzle.queue([]); // uniqueness ok
+      const pgErr = Object.assign(new Error('dup'), { code: '23505' });
+      (drizzle.db.returning as jest.Mock).mockReturnValueOnce(Promise.reject(pgErr));
+      await expect(
+        service.create({ companyId: 'c1', branchId: 'b1', code: 'T', capacity: 1, maxLevel: 1 }, {}),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rethrows non-unique-violation insert errors', async () => {
+      drizzle.queue([]);
+      (drizzle.db.returning as jest.Mock).mockReturnValueOnce(Promise.reject(new Error('boom')));
+      await expect(
+        service.create({ companyId: 'c1', branchId: 'b1', code: 'T', capacity: 1, maxLevel: 1 }, {}),
+      ).rejects.toThrow('boom');
+    });
+
+    it('applies defaults for optional numeric and nullable fields', async () => {
+      drizzle.queue([]); // uniqueness ok
+      drizzle.queue([{ id: 't9' }]); // returning
+      await service.create({ companyId: 'c1', branchId: 'b1', code: 'T', capacity: 1000, maxLevel: 900 }, {});
+      const valuesArg = (drizzle.db.values as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(valuesArg).toMatchObject({
+        productId: null,
+        minLevel: '0',
+        currentLevel: '0',
+        calibrationProfile: null,
+        status: 'active',
+      });
+    });
+
+    it('passes through explicit optional fields', async () => {
+      drizzle.queue([]);
+      drizzle.queue([{ id: 't9' }]);
+      await service.create(
+        { companyId: 'c1', branchId: 'b1', productId: 'p1', code: 'T', capacity: 1000, minLevel: 10, maxLevel: 900, currentLevel: 500, calibrationProfile: 'cal', status: 'inactive' },
+        {},
+      );
+      const valuesArg = (drizzle.db.values as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(valuesArg).toMatchObject({
+        productId: 'p1', minLevel: '10', currentLevel: '500', calibrationProfile: 'cal', status: 'inactive',
+      });
+    });
+  });
+
+  describe('update extra branches', () => {
+    it('applies every field and skips the uniqueness check when code is unchanged', async () => {
+      drizzle.queue([{ id: 't1', companyId: 'c1', branchId: 'b1', code: 'SAME' }]);
+      const upd = { id: 't1', code: 'SAME' };
+      drizzle.queue([upd]); // returning (no uniqueness select consumed)
+      const res = await service.update(
+        't1',
+        { companyId: 'c2', branchId: 'b2', productId: 'p2', code: 'SAME', capacity: 1, minLevel: 2, maxLevel: 3, currentLevel: 4, calibrationProfile: 'cal', status: 'inactive' },
+        { userId: 'u1' },
+      );
+      const setArg = (drizzle.db.set as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(setArg).toMatchObject({ companyId: 'c2', branchId: 'b2', productId: 'p2', code: 'SAME', capacity: '1', minLevel: '2', maxLevel: '3', currentLevel: '4', calibrationProfile: 'cal', status: 'inactive', updatedBy: 'u1' });
+      expect(res).toEqual(upd);
+    });
+
+    it('throws NotFoundException when the update returns no row', async () => {
+      drizzle.queue([{ id: 't1', companyId: 'c1', branchId: 'b1', code: 'OLD' }]);
+      drizzle.queue([]); // returning empty
+      await expect(service.update('t1', { status: 'inactive' }, {})).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('remove', () => {
     it('throws NotFoundException when missing', async () => {
       drizzle.queue([]);

@@ -50,6 +50,24 @@ describe('ExportsWorker', () => {
     expect((worker as any).timer).toBeNull();
   });
 
+  it('is a no-op when onModuleDestroy runs without an active timer', () => {
+    const { worker } = makeWorker([]);
+    expect(() => worker.onModuleDestroy()).not.toThrow();
+    expect((worker as any).timer).toBeNull();
+  });
+
+  it('uses the default poll interval when config returns the fallback', () => {
+    jest.useFakeTimers();
+    const { worker, config } = makeWorker([]);
+    const tickSpy = jest.spyOn(worker as any, 'tick').mockResolvedValue(undefined);
+
+    worker.onModuleInit();
+    expect(config.get).toHaveBeenCalledWith('EXPORT_OUTBOX_POLL_INTERVAL_SECONDS', 10);
+    jest.advanceTimersByTime(10_000);
+    expect(tickSpy).toHaveBeenCalledTimes(1);
+    worker.onModuleDestroy();
+  });
+
   it('logs and continues when an interval tick rejects', async () => {
     jest.useFakeTimers();
     const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);

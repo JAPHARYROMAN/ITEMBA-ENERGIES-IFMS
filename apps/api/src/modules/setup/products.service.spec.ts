@@ -137,4 +137,85 @@ describe('ProductsService', () => {
       );
     });
   });
+
+  describe('extra branch coverage', () => {
+    it('findPage applies an ascending sort with no filters', async () => {
+      drizzle.queue([]);
+      drizzle.queue([{ count: 0 }]);
+      const res = await service.findPage({ sort: 'name:asc' });
+      expect(res.total).toBe(0);
+    });
+
+    it('findById returns the row without a company scope', async () => {
+      const row = { id: 'p1', code: 'A' };
+      drizzle.queue([row]);
+      await expect(service.findById('p1')).resolves.toEqual(row);
+    });
+
+    it('create defaults unit to L and status to active and stringifies a numeric price', async () => {
+      drizzle.queue([]); // uniqueness
+      drizzle.queue([{ id: 'p9' }]);
+      await service.create({ companyId: 'c1', code: 'X', name: 'N', category: 'fuel', pricePerUnit: 9.5 }, {});
+      const valuesArg = (drizzle.db.values as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(valuesArg).toMatchObject({ unit: 'L', status: 'active', pricePerUnit: '9.5' });
+    });
+
+    it('create keeps a string price as-is and honors explicit unit/status', async () => {
+      drizzle.queue([]);
+      drizzle.queue([{ id: 'p9' }]);
+      await service.create({ companyId: 'c1', code: 'X', name: 'N', category: 'fuel', pricePerUnit: '7.25', unit: 'gal', status: 'inactive' }, {});
+      const valuesArg = (drizzle.db.values as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(valuesArg).toMatchObject({ pricePerUnit: '7.25', unit: 'gal', status: 'inactive' });
+    });
+
+    it('create throws InternalServerErrorException when insert returns nothing', async () => {
+      drizzle.queue([]);
+      drizzle.queue([]); // returning empty
+      await expect(
+        service.create({ companyId: 'c1', code: 'X', name: 'N', category: 'fuel', pricePerUnit: 1 }, {}),
+      ).rejects.toThrow('Insert failed');
+    });
+
+    it('create translates a pg unique violation into a ConflictException', async () => {
+      drizzle.queue([]);
+      const pgErr = Object.assign(new Error('dup'), { code: '23505' });
+      (drizzle.db.returning as jest.Mock).mockReturnValueOnce(Promise.reject(pgErr));
+      await expect(
+        service.create({ companyId: 'c1', code: 'X', name: 'N', category: 'fuel', pricePerUnit: 1 }, {}),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('update applies every field and skips uniqueness when code unchanged', async () => {
+      drizzle.queue([{ id: 'p1', companyId: 'c1', code: 'SAME' }]);
+      const upd = { id: 'p1', code: 'SAME' };
+      drizzle.queue([upd]);
+      await service.update(
+        'p1',
+        { companyId: 'c2', code: 'SAME', name: ' N ', category: ' cat ', pricePerUnit: 3, unit: 'gal', status: 'inactive' },
+        { userId: 'u1' },
+      );
+      const setArg = (drizzle.db.set as jest.Mock).mock.calls.at(-1)?.[0];
+      expect(setArg).toMatchObject({ companyId: 'c2', code: 'SAME', name: 'N', category: 'cat', pricePerUnit: '3', unit: 'gal', status: 'inactive', updatedBy: 'u1' });
+    });
+
+    it('update throws NotFoundException when the write returns no row', async () => {
+      drizzle.queue([{ id: 'p1', companyId: 'c1', code: 'OLD' }]);
+      drizzle.queue([]); // returning empty
+      await expect(service.update('p1', { name: 'x' }, {})).rejects.toThrow(NotFoundException);
+    });
+
+    it('update translates a pg unique violation into a ConflictException', async () => {
+      drizzle.queue([{ id: 'p1', companyId: 'c1', code: 'OLD' }]);
+      drizzle.queue([]); // uniqueness ok (code changed)
+      const pgErr = Object.assign(new Error('dup'), { code: '23505' });
+      (drizzle.db.returning as jest.Mock).mockReturnValueOnce(Promise.reject(pgErr));
+      await expect(service.update('p1', { code: 'DUP' }, {})).rejects.toThrow(ConflictException);
+    });
+
+    it('remove reports the dependency count in the BadRequest message', async () => {
+      drizzle.queue([{ id: 'p1', companyId: 'c1', code: 'A' }]);
+      drizzle.queue([{ count: 2 }]);
+      await expect(service.remove('p1', {})).rejects.toThrow(/2 active tank/);
+    });
+  });
 });
