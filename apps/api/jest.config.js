@@ -14,16 +14,17 @@ module.exports = {
     '!src/database/reset-admin.ts',
   ],
   // Coverage ratchet: thresholds are pinned just below the CURRENT measured
-  // coverage so CI cannot regress. The previous 40/40/50/50 values were
-  // aspirational and never met (actual ~14/16/21/20), so they kept CI red on
-  // every commit. Raise these incrementally as real test coverage improves —
-  // never lower them. See follow-up task to grow coverage back toward 50%.
+  // coverage so CI cannot regress. Raise these incrementally as real test
+  // coverage improves — never lower them. Measured at the last ratchet:
+  // statements 33.74, branches 24.22, lines 34.75, functions 28.65
+  // (setup/core/transfers/inventory services + controllers now covered).
+  // See follow-up task to grow coverage back toward 50%.
   coverageThreshold: {
     global: {
-      branches: 13,
-      functions: 15,
-      lines: 20,
-      statements: 20,
+      branches: 22,
+      functions: 26,
+      lines: 32,
+      statements: 31,
     },
   },
 };
