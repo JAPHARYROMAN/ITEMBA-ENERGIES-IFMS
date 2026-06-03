@@ -162,6 +162,10 @@ jobs:
       - name: Check migration consistency
         run: npx drizzle-kit check
         working-directory: apps/api
+        env:
+          # drizzle.config.ts exits if DATABASE_URL is unset; `check` only reads
+          # local migration files and never connects, so a placeholder suffices.
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
 
   security:
     runs-on: ubuntu-latest

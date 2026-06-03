@@ -1,5 +1,6 @@
 import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
 import { ApiTags, ApiExcludeEndpoint } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
 import { SystemService } from './system.service';
@@ -11,6 +12,7 @@ export class SystemController {
 
   @Get('health/live')
   @Public()
+  @SkipThrottle({ short: true, medium: true })
   @ApiExcludeEndpoint()
   getLiveness() {
     return this.systemService.getLiveness();
@@ -18,6 +20,7 @@ export class SystemController {
 
   @Get('health/ready')
   @Public()
+  @SkipThrottle({ short: true, medium: true })
   @ApiExcludeEndpoint()
   async getReadiness(@Res({ passthrough: true }) res: Response) {
     const readiness = await this.systemService.getReadiness();
