@@ -16,17 +16,16 @@ module.exports = {
   // Coverage ratchet: thresholds are pinned just below the CURRENT measured
   // coverage so CI cannot regress. Raise these incrementally as real test
   // coverage improves — never lower them. Measured at the last ratchet:
-  // statements 83.46, branches 61.35, lines 86.89, functions 82.83
-  // (deep service/controller/DTO coverage across auth, AI, notifications,
-  // exports, reports, admin, common support, sales, expenses, credit,
-  // payables, deliveries, transfers, shifts, governance, inventory, audit —
-  // 989 unit/integration tests).
+  // statements 88.6, branches 67.9, lines 92.5, functions 86.0
+  // (added branch-focused tests for core/setup services, auth guards,
+  // system, middleware, sanitize decorator, notification triggers, exports
+  // worker, ai-chat, and many DTO validation paths — 1292 unit tests).
   coverageThreshold: {
     global: {
-      branches: 60,
-      functions: 81,
-      lines: 85,
-      statements: 82,
+      branches: 66,
+      functions: 84,
+      lines: 90,
+      statements: 87,
     },
   },
 };

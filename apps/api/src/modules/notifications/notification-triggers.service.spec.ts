@@ -236,4 +236,74 @@ describe('NotificationTriggersService', () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  describe('error handling for every trigger', () => {
+    let errorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      notificationService.createNotification.mockRejectedValue(new Error('boom'));
+      errorSpy = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+    });
+
+    afterEach(() => errorSpy.mockRestore());
+
+    const approvalReq = {
+      companyId: 'c1', branchId: 'b1', title: 't', entityType: 'sale', entityId: 's1', approvers: ['m1'],
+    };
+    const decision = {
+      companyId: 'c1', branchId: 'b1', title: 't', entityType: 'sale', entityId: 's1', requesterId: 'r1',
+    };
+
+    it('logs and swallows errors from notifyApprovalRequestCreated', async () => {
+      await expect(service.notifyApprovalRequestCreated('r1', approvalReq)).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('approval request notification'));
+    });
+
+    it('logs and swallows errors from notifyApprovalApproved', async () => {
+      await expect(service.notifyApprovalApproved('r1', decision)).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('approval approved notification'));
+    });
+
+    it('logs and swallows errors from notifyApprovalRejected', async () => {
+      await expect(service.notifyApprovalRejected('r1', decision)).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('approval rejected notification'));
+    });
+
+    it('logs and swallows errors from notifyShrinkageVariance', async () => {
+      await expect(
+        service.notifyShrinkageVariance({ id: 'v1', companyId: 'c1', branchId: 'b1', productId: 'p1', productName: 'Diesel', variancePercentage: 6, thresholdValue: 5 }),
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('shrinkage variance notification'));
+    });
+
+    it('logs and swallows errors from notifySuddenLevelDrop', async () => {
+      await expect(
+        service.notifySuddenLevelDrop({ companyId: 'c1', branchId: 'b1', stationId: 's1', tankId: 't1', tankCode: 'T', dropAmount: 1, previousLevel: 2, currentLevel: 1 }),
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('sudden level drop notification'));
+    });
+
+    it('logs and swallows errors from notifyInvoiceOverdue', async () => {
+      await expect(
+        service.notifyInvoiceOverdue({ id: 'i1', companyId: 'c1', invoiceNumber: 'INV', customerId: 'cu1', customerName: 'X', amount: 1, daysOverdue: 1, dueDate: 'd' }),
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('overdue invoice notification'));
+    });
+
+    it('logs and swallows errors from notifyPayableDue', async () => {
+      await expect(
+        service.notifyPayableDue({ id: 'pd1', companyId: 'c1', invoiceNumber: 'B', supplierId: 'su1', supplierName: 'S', amount: 1, daysUntilDue: 5, dueDate: 'd' }),
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('payable due notification'));
+    });
+
+    it('logs and swallows errors from notifyShiftVariance', async () => {
+      await expect(
+        service.notifyShiftVariance({ companyId: 'c1', branchId: 'b1', stationId: 's1', shiftId: 'sh1', varianceId: 'v1', varianceType: 'cash_short', varianceAmount: 1, shiftDate: 'd' }),
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('shift variance notification'));
+    });
+  });
 });

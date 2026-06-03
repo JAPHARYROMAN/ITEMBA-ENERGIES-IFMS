@@ -43,7 +43,7 @@ jobs:
         run: npx tsc -p tsconfig.json --noEmit
         working-directory: apps/api
 
-  test:
+  test-web:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
     steps:
@@ -55,9 +55,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            apps/api/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install frontend deps
         run: npm ci
@@ -69,6 +67,20 @@ jobs:
           # frontend env schema so vite.config.ts loads without VITE_API_URL.
           VITE_DEMO_MODE: 'true'
 
+  test-api:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+
       - name: Install API deps
         run: npm ci
         working-directory: apps/api
@@ -79,7 +91,7 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    needs: test
+    needs: test-api
     services:
       postgres:
         image: postgres:16-alpine
@@ -126,7 +138,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test-web, test-api]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
