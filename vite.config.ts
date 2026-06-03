@@ -16,6 +16,30 @@ export default defineConfig(({ mode }) => {
       exclude: ['**/node_modules/**', '**/apps/api/**'],
       maxWorkers: 1,
       setupFiles: ['./lib/test-setup.ts'],
+      coverage: {
+        provider: 'v8',
+        // Count ALL source files (not just test-imported ones) so the gate
+        // reflects true coverage of the app and cannot be gamed by deleting tests.
+        all: true,
+        include: ['lib/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}', 'store.ts', 'App.tsx'],
+        exclude: [
+          '**/*.test.{ts,tsx}',
+          '**/*.d.ts',
+          'lib/test-setup.ts',
+          'lib/locales/**',
+        ],
+        reporter: ['text-summary', 'text'],
+        // Coverage ratchet (same policy as the API jest gate): pinned just below
+        // the current measured floor so CI cannot regress. Raise as the large
+        // untested surface (page components) gets covered — never lower.
+        // Measured: statements 24.65, branches 19.47, functions 21.36, lines 24.68.
+        thresholds: {
+          statements: 23,
+          branches: 18,
+          functions: 20,
+          lines: 23,
+        },
+      },
     },
     plugins: [react()],
     build: {
