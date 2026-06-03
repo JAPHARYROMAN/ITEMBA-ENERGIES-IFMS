@@ -159,8 +159,8 @@ jobs:
         run: npm run build
         working-directory: apps/api
 
-      - name: Check migrations are up to date
-        run: npx drizzle-kit generate --check
+      - name: Check migration consistency
+        run: npx drizzle-kit check
         working-directory: apps/api
 
   security:
